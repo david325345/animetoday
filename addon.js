@@ -1,6 +1,6 @@
 const express = require('express');
 const { serveHTTP } = require('stremio-addon-sdk');
-const axios = require('axios');
+const axios = require('axios'); // Tohle je klíčové, pokud to chybí, padne to
 
 const app = express();
 
@@ -12,12 +12,11 @@ const ADDON_ID = "com.example.anilist-today";
 function getTodayRangeJST() {
     const now = new Date();
     const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
-    const jstTime = new Date(utc + (3600000 * 9)); // JST je UTC+9
+    const jstTime = new Date(utc + (3600000 * 9)); 
     
     jstTime.setHours(0, 0, 0, 0);
     const startOfDay = Math.floor(jstTime.getTime() / 1000);
-    const endOfDay = startOfDay + 86400 - 1; // Do konce dne
-
+    const endOfDay = startOfDay + 86400 - 1; 
     return { startOfDay, endOfDay };
 }
 
@@ -26,7 +25,7 @@ const manifest = {
     id: ADDON_ID,
     version: '1.0.0',
     name: ADDON_NAME,
-    description: 'Zobrazuje anime vysílaná dnes podle AniList API',
+    description: 'Zobrazuje anime vysílaná dnes',
     resources: ['catalog', 'meta'],
     types: ['series'],
     catalogs: [
@@ -41,13 +40,9 @@ const manifest = {
 };
 
 // --- HANDLERY ---
-
-// KATALOG (Seznam anime)
 async function catalogHandler(args) {
     const { startOfDay, endOfDay } = getTodayRangeJST();
 
-    // Načteme širší zásobník (2 stránky) pro větší šanci, že něco dnes běží
-    // V produkci je lepší používat vyrovnávací paměť (cache), ale pro demo to stačí
     const query = `
     query ($page: Int, $perPage: Int) {
         Page(page: $page, perPage: $perPage) {
@@ -66,18 +61,14 @@ async function catalogHandler(args) {
     try {
         const response = await axios.post('https://graphql.anilist.co', {
             query: query,
-            variables: { page: 1, perPage: 50 } // Získáme top 50 populárních
+            variables: { page: 1, perPage: 50 }
         });
-
         const allMedia = response.data.data.Page.media;
-        
-        // Filtrujeme: Dnes vysílaná v JST
         const todayAnime = allMedia.filter(anime => {
             if (!anime.nextAiringEpisode) return false;
             const airingTime = anime.nextAiringEpisode.airingAt;
             return airingTime >= startOfDay && airingTime <= endOfDay;
         });
-
         const metas = todayAnime.map(anime => ({
             id: `anilist:${anime.id}`,
             type: 'series',
@@ -86,16 +77,13 @@ async function catalogHandler(args) {
             description: `Další díl: Ep. ${anime.nextAiringEpisode.episode}\n\n${anime.description?.slice(0, 300)}...`,
             genres: anime.genres
         }));
-
         return { metas };
-
     } catch (error) {
         console.error("Chyba AniList:", error.message);
         return { metas: [] };
     }
 }
 
-// META (Detaily)
 async function metaHandler(args) {
     if (!args.id.startsWith('anilist:')) return { meta: null };
     const anilistId = args.id.split(':')[1];
@@ -109,14 +97,12 @@ async function metaHandler(args) {
         }
     }
     `;
-
     try {
         const response = await axios.post('https://graphql.anilist.co', {
             query: query,
             variables: { id: parseInt(anilistId) }
         });
         const data = response.data.data.Media;
-        
         return {
             meta: {
                 id: `anilist:${data.id}`, type: 'series', name: data.title.romaji,
@@ -131,7 +117,7 @@ async function metaHandler(args) {
     }
 }
 
-// --- SETUP SERVERU ---
+// --- SERVER ---
 app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Headers', '*');
@@ -140,16 +126,9 @@ app.use((req, res, next) => {
     next();
 });
 
-// Health check pro Render.com
-app.get('/', (req, res) => {
-    res.send('Stremio Addon běží na Render.com');
-});
+app.get('/', (req, res) => res.send('Stremio Addon běží'));
 
-// Připojíme Stremio SDK router
 app.use('/', serveHTTP(manifest, { catalog: catalogHandler, meta: metaHandler }));
 
-// Nastavení portu (Render nastavuje proměnnou prostředí PORT)
 const PORT = process.env.PORT || 7000;
-app.listen(PORT, () => {
-    console.log(`Server běží na portu ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server běží na portu ${PORT}`));
