@@ -1,7 +1,7 @@
 {
   "name": "stremio-anilist-today",
   "version": "1.0.0",
-  "description": "AniList addon for Stremio showing today's airing anime",
+  "description": "AniList addon for Stremio",
   "main": "addon.js",
   "scripts": {
     "start": "node addon.js"
@@ -12,6 +12,6 @@
     "stremio-addon-sdk": "^1.6.4"
   },
   "engines": {
-    "node": ">=14.0.0"
+    "node": ">=16.0.0"
   }
 }
