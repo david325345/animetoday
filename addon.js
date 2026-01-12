@@ -1,6 +1,6 @@
 const express = require('express');
 const { serveHTTP } = require('stremio-addon-sdk');
-const axios = require('axios'); // Tohle je klíčové, pokud to chybí, padne to
+const axios = require('axios');
 
 const app = express();
 
@@ -117,7 +117,7 @@ async function metaHandler(args) {
     }
 }
 
-// --- SERVER ---
+// --- SERVER SETUP ---
 app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Headers', '*');
@@ -128,6 +128,7 @@ app.use((req, res, next) => {
 
 app.get('/', (req, res) => res.send('Stremio Addon běží'));
 
+// TOTO JE ZMĚNA PRO SDK 1.5.0 - serveHTTP správně namapované
 app.use('/', serveHTTP(manifest, { catalog: catalogHandler, meta: metaHandler }));
 
 const PORT = process.env.PORT || 7000;
