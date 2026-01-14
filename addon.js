@@ -5,17 +5,19 @@ const cors = require('cors');
 
 const app = express();
 
+// --- Nastavení ---
 app.set('trust proxy', true);
 app.use(cors());
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
+// Konfigurace Addonu
 const ADDON_CONFIG = {
-    id: 'org.anilist.stream.today',
-    version: '4.1.0',
-    name: 'AniList Dnes + Nyaa Final',
-    description: 'Opravené vyhledávání - Bez poškození názvů',
+    id: 'org.anilist.stream.basic',
+    version: '5.0.0',
+    name: 'AniList Dnes + Nyaa Basic',
+    description: 'Metadata z AniList + Základní Nyaa Search (Žádné filtry)',
     logo: 'https://anilist.co/img/icons/android-icon-192x192.png',
     background: 'https://anilist.co/img/logo_al.png',
     resources: ['catalog', 'meta', 'stream'], 
@@ -23,14 +25,14 @@ const ADDON_CONFIG = {
     catalogs: [{
         type: 'series',
         id: 'anilist_today',
-        name: 'Dnes vychází (Fixed Search)',
+        name: 'Dnes vychází (Basic)',
         extra: [{ name: 'search', isRequired: false }] 
     }]
 };
 
 let animeCache = { data: [], timestamp: 0, ttl: 20 * 60 * 1000 };
 
-// --- Keep-Alive ---
+// --- Keep-Alive (Render) ---
 async function keepAlive() {
     try {
         const baseUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
@@ -39,7 +41,7 @@ async function keepAlive() {
 }
 setInterval(keepAlive, 10 * 60 * 1000);
 
-// --- AniList API ---
+// --- AniList GraphQL API (Metadata) ---
 async function fetchAiringToday() {
     const now = Date.now();
     if (animeCache.data.length > 0 && (now - animeCache.timestamp) < animeCache.ttl) {
@@ -49,6 +51,7 @@ async function fetchAiringToday() {
     try {
         const d = new Date();
         const startOfDayUTC = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+        // Čas pro ČR (UTC+1)
         const todayStart = Math.floor(startOfDayUTC.getTime() / 1000) - 3600;
         const todayEnd = todayStart + 86400; 
 
@@ -85,7 +88,7 @@ async function fetchAiringToday() {
             headers: { 
                 'Content-Type': 'application/json', 
                 'Accept': 'application/json',
-                'User-Agent': 'Stremio-AniList-Addon/4.1'
+                'User-Agent': 'Stremio-Basic-Addon/5.0'
             }
         });
 
@@ -104,12 +107,12 @@ async function fetchAiringToday() {
         const animeList = schedule.map(item => {
             const media = item.media;
             const title = media.title.romaji || media.title.english;
-            const safeEpisode = item.episode ||1;
+            const safeEpisode = item.episode || 1;
             
             return {
                 id: `anilist-${media.id}`, 
                 name: title,
-                romaji: media.title.romaji, // POUŽÍVÁME PŘESNÝ NÁZEV
+                romaji: media.title.romaji,
                 english: media.title.english,
                 episode: safeEpisode,
                 airingAt: item.airingAt,
@@ -141,95 +144,57 @@ async function fetchAiringToday() {
     }
 }
 
-// --- NYAA FINAL SEARCH LOGIC ---
+// --- ZÁKLADNÍ NYAA SEARCH (Bez komplexity) ---
 async function findStreamOnNyaa(animeRomaji, animeEnglish, episode) {
     
-    const performSearch = async (query) => {
-        const rssUrl = `https://nyaa.si/?page=rss&q=${encodeURIComponent(query)}&s=seeders&o=desc`;
-        console.log(`🔍 Dotazuji Nyaa: "${query}"`);
-
+    // Funkce pro získání RSS
+    const fetchRss = async (searchQuery) => {
+        const rssUrl = `https://nyaa.si/?page=rss&q=${encodeURIComponent(searchQuery)}&s=seeders&o=desc`;
         try {
+            console.log(`🔍 Hledám: ${searchQuery}`);
             const response = await axios.get(rssUrl, { 
                 timeout: 8000, 
                 headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
             });
+
             const $ = cheerio.load(response.data, { xmlMode: true });
-            const results = [];
+            const streams = [];
             
             $('item').each((index, element) => {
-                if (index >= 5) return false;
+                if (index >= 10) return false; // Limit na 10 výsledků pro základní verzi
                 const $el = $(element);
                 const title = $el.find('title').text();
                 let magnetUrl = $el.find('enclosure').attr('url');
+                
+                // Fallback pokud není enclosure
                 if (!magnetUrl) {
                     const linkUrl = $el.find('link').text();
                     if (linkUrl && linkUrl.includes('magnet')) magnetUrl = linkUrl;
                 }
+
                 if (magnetUrl) {
-                    results.push({ title, url: magnetUrl });
+                    streams.push({
+                        name: '🧲 Nyaa Torrent',
+                        title: title,
+                        url: magnetUrl
+                    });
                 }
             });
-            return results;
+            return streams;
         } catch (error) {
             return [];
         }
     };
 
-    const episodeStr = episode.toString();
+    // 1. Zkusíme Romaji
+    let streams = await fetchRss(`${animeRomaji} - ${episode}`);
 
-    // --- STRATEGIE 1: PŘÍMÝ DOTAZ (Romaji) ---
-    // Nepoužíváme čištění (sanitization), jen čistý název z AniList
-    let streams = await performSearch(`${animeRomaji} - ${episodeStr}`);
-
-    // --- STRATEGIE 2: PřÍMÝ DOTAZ (English) ---
+    // 2. Pokud nic, zkusíme English (Fallback)
     if (streams.length === 0 && animeEnglish) {
-        console.log(`🔄 Romaji nic, zkouším English...`);
-        streams = await performSearch(`${animeEnglish} - ${episodeStr}`);
+        streams = await fetchRss(`${animeEnglish} - ${episode}`);
     }
 
-    // --- STRATEGIE 3: FALLBACK S VYHLEDAVÁNÍM JEN JMÉNA ---
-    // Tohle je klíčový moment, kde se hledalo špatně.
-    // Nyní použijeme REGEX pro bezpečné vyfiltrování epizody.
-    if (streams.length === 0) {
-        console.log(`🔄 Přímé dotazy selhaly, zkouším Fallback (Jen jméno + Regex)...`);
-        
-        // Získáme výsledky jen pro jméno anime (např. 20 výsledků)
-        let rawResults = await performSearch(animeRomaji);
-        
-        if (rawResults.length === 0 && animeEnglish) {
-            rawResults = await performSearch(animeEnglish);
-        }
-
-        // --- REGEX FILTR ---
-        // Hledáme číslo epizody, které je "oddělené" mezerou, pomlčkou, tečkou nebo závorkou.
-        // Zabrání to nalezení "2" v "24".
-        const episodeRegex = new RegExp(`[^0-9]${episodeStr}[^0-9]`, 'i');
-        
-        streams = rawResults.filter(item => {
-            return episodeRegex.test(item.title);
-        });
-
-        if (streams.length > 0) {
-            console.log(`✅ Fallback našel ${streams.length} výsledků přes Regex.`);
-        }
-    }
-
-    if (streams.length > 0) {
-        return streams.map(item => {
-            let quality = 'Torrent';
-            const t = item.title;
-            if (t.includes('1080p')) quality = '1080p';
-            else if (t.includes('720p')) quality = '720p';
-            else if (t.includes('480p')) quality = '480p';
-            return {
-                name: `🧲 Nyaa ${quality}`,
-                title: item.title,
-                url: item.url
-            };
-        });
-    }
-
-    return [];
+    return streams;
 }
 
 // --- ROUTES ---
@@ -240,19 +205,18 @@ app.get('/', (req, res) => {
 <html lang="cs">
 <head>
     <meta charset="UTF-8">
-    <title>AniList + Nyaa Final</title>
+    <title>AniList Basic Addon</title>
     <style>
         body { font-family: sans-serif; background: #121212; color: #fff; text-align: center; padding: 40px; }
         h1 { color: #60a5fa; margin-bottom: 10px; }
         .box { background: #1e1e1e; padding: 30px; border-radius: 15px; display: inline-block; margin-top: 20px; border: 1px solid #333; }
         .code { color: #a5f3fc; font-family: monospace; background: #000; padding: 10px 15px; border-radius: 6px; font-size: 1.1em; display: block; margin: 15px 0; }
         a.btn { color: #121212; background: #60a5fa; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block; margin-top: 10px; }
-        a.btn:hover { background: #3b82f6; }
     </style>
 </head>
 <body>
-    <h1>AniList + Nyaa Final</h1>
-    <p>Opravené vyhledávání s Regex fallbackem</p>
+    <h1>AniList Basic (5.0)</h1>
+    <p>Základní verze - Žádné složité filtry</p>
     <div class="box">
         <div>Manifest URL:</div>
         <div class="code">${baseUrl}/manifest.json</div>
@@ -348,7 +312,7 @@ app.get('/stream/:type/:id.json', async (req, res) => {
             const anime = animeList.find(a => a.id === animeId);
 
             if (anime && !anime.isPlaceholder) {
-                // VOLÁME FINÁLNÍ HLEDÁNÍ
+                // ZÁKLADNÍ HLEDÁNÍ (Romaji + English)
                 const streams = await findStreamOnNyaa(anime.romaji || anime.name, anime.english, anime.episode);
 
                 if (streams.length > 0) {
@@ -357,8 +321,8 @@ app.get('/stream/:type/:id.json', async (req, res) => {
                     return res.json({
                         streams: [{
                             name: '❌ Torrent nenalezen',
-                            title: 'Vyhledáno i s Fallback strategií',
-                            url: 'data:text/plain,Not Available'
+                            title: 'Zkuste to znovu později',
+                            url: 'data:text/plain,Not Found'
                         }]
                     });
                 }
@@ -382,6 +346,6 @@ app.use((err, req, res, next) => {
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 AniList + Nyaa Final Addon běží na portu ${PORT}`);
+    console.log(`🚀 AniList Basic Addon běží na portu ${PORT}`);
     setTimeout(keepAlive, 2 * 60 * 1000);
 });
