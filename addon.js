@@ -13,16 +13,12 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
-// KONFIGURACE:
-// 'ANILIST' - Používá AniList ID (nejlepší pro čerstvé epizody, protože scrolleři to monitorují).
-// 'MAL'      - Používá MyAnimeList ID (funguje dobře pro starší anime, nové mohou mít zpoždění indexace).
-const ID_PRIORITY = 'ANILIST'; 
-
+// Konfigurace Addonu
 const ADDON_CONFIG = {
     id: 'org.anilist.meta.today',
-    version: '1.3.0',
-    name: 'AniList Dnes (Smart ID)',
-    description: 'Katalog anime vycházejících dnes - Inteligentní výběr ID',
+    version: '2.0.0',
+    name: 'AniList Dnes (IMDB ID)',
+    description: 'Katalog anime vycházejících dnes - Automatický překlad na IMDB',
     logo: 'https://anilist.co/img/icons/android-icon-192x192.png',
     background: 'https://anilist.co/img/logo_al.png',
     resources: ['catalog', 'meta'], 
@@ -48,6 +44,25 @@ async function keepAlive() {
     }
 }
 setInterval(keepAlive, 10 * 60 * 1000);
+
+// Pomocná funkce pro získání IMDB ID z MAL ID přes Malsync API
+async function getImdbId(malId) {
+    try {
+        // Zpoždění pro ochranu API (200ms)
+        await new Promise(resolve => setTimeout(resolve, 200));
+        
+        const response = await axios.get(`https://api.malsync.moe/mal/anime/${malId}`, { timeout: 5000 });
+        
+        // Malsync API má strukturu Sites.IMDb.id
+        if (response.data && response.data.Sites && response.data.Sites.IMDb) {
+            return response.data.Sites.IMDb.id; // Vrací např. "tt12345678"
+        }
+        return null;
+    } catch (error) {
+        // Pokud se nepodaří získat IMDB, ignorujeme (běžné u nového anime)
+        return null;
+    }
+}
 
 // --- AniList GraphQL API ---
 async function fetchAiringToday() {
@@ -101,7 +116,7 @@ async function fetchAiringToday() {
             headers: { 
                 'Content-Type': 'application/json', 
                 'Accept': 'application/json',
-                'User-Agent': 'Stremio-AniList-Addon/1.3'
+                'User-Agent': 'Stremio-AniList-Addon/2.0'
             }
         });
 
@@ -110,7 +125,7 @@ async function fetchAiringToday() {
         if (!schedule || schedule.length === 0) {
             console.log('📭 Dnes dle AniList nevychází nic.');
             return [{
-                id: 'anilist-empty',
+                id: 'tt0',
                 name: 'Dnes nic nevychází',
                 poster: 'https://via.placeholder.com/300x400/000000/FFFFFF?text=Žádné+anime',
                 isPlaceholder: true,
@@ -118,61 +133,66 @@ async function fetchAiringToday() {
             }];
         }
 
-        const animeList = schedule.map(item => {
-            const media = item.media;
-            const malId = media.idMal;
-            const title = media.title.romaji || media.title.english;
-            
-            let finalId = '';
-            
-            if (ID_PRIORITY === 'MAL') {
-                // Logika z předchozího kódu (MAL priorita)
-                finalId = malId ? `mal-${malId}` : `anilist-${media.id}`;
-            } else {
-                // NOVÁ LOGIKA: AniList priorita (lepší pro čerstvé anime)
-                // Používáme AniList ID jako primární. Scrollery ho znají nejlépe.
-                finalId = `anilist-${media.id}`;
-                // Pokud bys chtěl v budoucnu zálohu na MAL (např. pro jiné addony):
-                // finalId = malId ? `mal-${malId}` : `anilist-${media.id}`;
-            }
-            
-            const safeEpisode = item.episode || 1;
-            
-            // Logování pro debugging
-            console.log(`🎯 ${title} (Ep ${safeEpisode}): Používám ID ${finalId}`);
+        // Asynchronní zpracování s mapováním na IMDB
+        // Používáme Promise.allSettled pro rychlost a odolnost proti chybám
+        const processedData = await Promise.allSettled(
+            schedule.map(async (item) => {
+                const media = item.media;
+                const malId = media.idMal;
+                const title = media.title.romaji || media.title.english;
+                
+                // --- ZÍSKÁNÍ IMDB ID ---
+                const imdbId = await getImdbId(malId);
+                
+                // --- ROZHODOVACÍ LOGIKA ID ---
+                // 1. Pokud existuje IMDB ID -> Použijeme tt12345678 (Funguje všude v Cinemeta/Stremiu)
+                // 2. Pokud IMDB ID NEEXISTUJE -> Použijeme anilist-12345 (Záloha pro Torrentio/Aliyun)
+                const finalId = imdbId ? imdbId : `anilist-${media.id}`;
+                
+                const safeEpisode = item.episode || 1;
+                
+                if (imdbId) {
+                    console.log(`🎯 ${title}: IMDB ID ${imdbId} nalezeno.`);
+                } else {
+                    console.log(`⚠️ ${title}: IMDB ID nenalezeno, používám AniList ID.`);
+                }
+                
+                return {
+                    id: finalId, 
+                    anilistId: media.id,
+                    malId: malId,
+                    imdbId: imdbId || null,
+                    name: title,
+                    romaji: media.title.romaji,
+                    episode: safeEpisode,
+                    airingAt: item.airingAt,
+                    poster: media.coverImage.extraLarge || media.coverImage.large,
+                    background: media.bannerImage || media.coverImage.extraLarge,
+                    description: (media.description || '').replace(/<[^>]*>?/gm, '').substring(0, 800), 
+                    genres: media.genres,
+                    rating: media.averageScore,
+                    year: media.seasonYear,
+                    studio: media.studios.nodes.map(n => n.name).join(', '),
+                    totalEpisodes: media.episodes,
+                    isPlaceholder: false
+                };
+            })
+        );
 
-            return {
-                id: finalId, 
-                anilistId: media.id,
-                malId: malId,
-                name: title,
-                romaji: media.title.romaji,
-                english: media.title.english, // Přidáno pro případný fallback v popisu
-                native: media.title.native,
-                episode: safeEpisode,
-                airingAt: item.airingAt,
-                poster: media.coverImage.extraLarge || media.coverImage.large,
-                background: media.bannerImage || media.coverImage.extraLarge,
-                description: (media.description || '').replace(/<[^>]*>?/gm, '').substring(0, 800), 
-                genres: media.genres,
-                rating: media.averageScore,
-                year: media.seasonYear,
-                studio: media.studios.nodes.map(n => n.name).join(', '),
-                totalEpisodes: media.episodes,
-                isPlaceholder: false
-            };
-        });
+        const animeList = processedData
+            .filter(p => p.status === 'fulfilled')
+            .map(p => p.value);
 
         animeCache.data = animeList;
         animeCache.timestamp = now;
-        console.log(`✅ Načteno ${animeList.length} seriálů (ID priorita: ${ID_PRIORITY})`);
+        console.log(`✅ Načteno ${animeList.length} seriálů (Priorita IMDB ID)`);
         return animeList;
 
     } catch (error) {
         console.error('❌ AniList Error:', error.message);
         if (error.response) console.error('Detail:', error.response.data);
         return [{
-            id: 'anilist-error',
+            id: 'tt0',
             name: 'Chyba API',
             poster: 'https://via.placeholder.com/300x400/FF0000/FFFFFF?text=Chyba',
             isPlaceholder: true,
@@ -201,16 +221,16 @@ app.get('/', (req, res) => {
     </style>
 </head>
 <body>
-    <h1>AniList Dnes (Smart ID)</h1>
-    <p>Nativní AniList ID pro lepší kompatibilitu s čerstvými epizodami</p>
+    <h1>AniList Dnes (IMDB ID)</h1>
+    <p>Automatický překlad ID na IMDB pro Stremio Cinemeta</p>
     <div class="box">
         <div>Manifest URL:</div>
         <div class="code">${baseUrl}/manifest.json</div>
         <a href="stremio://${req.get('host')}/manifest.json" class="btn">🚀 Instalovat do Stremio</a>
     </div>
     <div class="info">
-        ID Priority: <strong>${ID_PRIORITY}</strong><br>
-        Pokud se stále vyskytují problémy, podívej se do logů konzole, jaké ID se posílá.
+        🔄 Addon se snaží najít IMDB ID pro maximální kompatibilitu.<br>
+        Pokud IMDB ID neexistuje, používá záložní AniList ID.
     </div>
 </body>
 </html>`);
@@ -222,7 +242,7 @@ const sendCatalog = async (res) => {
     try {
         const animeList = await fetchAiringToday();
         const metas = animeList.map(anime => ({
-            id: anime.id,
+            id: anime.id, // Zde je buď tt... nebo anilist-...
             type: 'series',
             name: anime.name,
             poster: anime.poster,
@@ -253,7 +273,8 @@ app.get('/meta/:type/:id.json', async (req, res) => {
     try {
         const animeId = req.params.id;
         
-        if (animeId.startsWith('anilist-') || animeId.startsWith('mal-')) {
+        // Podpora pro tt (IMDB) i anilist- prefixy
+        if (animeId.startsWith('tt') || animeId.startsWith('anilist-')) {
             const animeList = await fetchAiringToday();
             const anime = animeList.find(a => a.id === animeId);
 
@@ -276,7 +297,7 @@ app.get('/meta/:type/:id.json', async (req, res) => {
                         name: anime.name,
                         poster: anime.poster,
                         background: anime.background,
-                        description: `${anime.description}\n\n\n📺 Dnes vychází epizoda: **${validEpisode}**\n⏰ Čas: ${airTime}\n⭐ Hodnocení: ${anime.rating}/100\n🎬 Studio: ${anime.studio}`,
+                        description: `${anime.description}\n\n\n📺 Dnes vychází epizoda: **${validEpisode}**\n⏰ Čas: ${airTime}\n⭐ Hodnocení: ${anime.rating}/100\n🎬 Studio: ${anime.studio}\n🎞️ ID: ${anime.id}`,
                         genres: anime.genres,
                         releaseInfo: anime.year ? anime.year.toString() : '',
                         videos: [{
@@ -315,6 +336,6 @@ app.use((err, req, res, next) => {
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 AniList Metadata Addon (Smart ID) běží na portu ${PORT}`);
+    console.log(`🚀 AniList Metadata Addon (IMDB Mapper) běží na portu ${PORT}`);
     setTimeout(keepAlive, 2 * 60 * 1000);
 });
