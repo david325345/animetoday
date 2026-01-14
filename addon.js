@@ -56,16 +56,12 @@ async function fetchAiringToday() {
         const d = new Date();
         const startOfDayUTC = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
         
-        // --- ÚPRAVA ČASU PRO ČR (UTC+1) ---
-        // UTC den začíná o 23:00 našeho času. Odečteme 1 hodinu (3600s), 
-        // aby "Dnes" zahrnovalo i anime, která vyšla v noci u nás.
+        // Úprava pro ČR (UTC+1) - posun o hodinu dozadu
         const todayStart = Math.floor(startOfDayUTC.getTime() / 1000) - 3600;
-        const todayEnd = todayStart + 86400; // Okno 24 hodin
-        // ---------------------------------
+        const todayEnd = todayStart + 86400;
 
         console.log(`🕒 Dotazuji AniList (Časové okno pro CET): ${todayStart} - ${todayEnd}`);
 
-        // OPRAVA API: airingSchedule -> airingSchedules (množné číslo)
         const query = `
             query ($from: Int, $to: Int) {
                 Page(page: 1, perPage: 30) {
@@ -103,7 +99,6 @@ async function fetchAiringToday() {
             }
         });
 
-        // OPRAVA API: airingSchedule -> airingSchedules
         const schedule = response.data.data.Page.airingSchedules;
         
         if (!schedule || schedule.length === 0) {
@@ -147,9 +142,6 @@ async function fetchAiringToday() {
 
     } catch (error) {
         console.error('❌ AniList Error:', error.message);
-        if (error.response) {
-            console.error('API Response:', error.response.data);
-        }
         return [{
             id: 'anilist:error',
             name: 'Chyba API',
@@ -175,21 +167,15 @@ app.get('/', (req, res) => {
         .code { color: #a5f3fc; font-family: monospace; background: #000; padding: 10px 15px; border-radius: 6px; font-size: 1.1em; display: block; margin: 15px 0; }
         a.btn { color: #121212; background: #60a5fa; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block; margin-top: 10px; }
         a.btn:hover { background: #3b82f6; }
-        .status { margin-top: 20px; font-size: 0.9em; color: #888; }
     </style>
 </head>
 <body>
     <h1>AniList Metadata Addon</h1>
-    <p>Pure Metadata Provider pro Stremio</p>
-    
+    <p>Pure Metadata Provider</p>
     <div class="box">
         <div>Manifest URL:</div>
         <div class="code">${baseUrl}/manifest.json</div>
-        <a href="stremio://${req.get('host')}/manifest.json" class="btn">🚀 Instalovat do Stremio</a>
-    </div>
-    
-    <div class="status">
-        Protokol: <span style="color:${req.protocol === 'https' ? '#4ade80' : '#f87171'}">${req.protocol.toUpperCase()}</span>
+        <a href="stremio://${req.get('host')}/manifest.json" class="btn">🚀 Instalovat</a>
     </div>
 </body>
 </html>`);
@@ -197,92 +183,120 @@ app.get('/', (req, res) => {
 
 app.get('/manifest.json', (req, res) => res.json(ADDON_CONFIG));
 
+// Katalog - Hlavní cesta
 app.get('/catalog/:type/:id.json', async (req, res) => {
-    if (req.params.id === 'anilist_today') {
-        const animeList = await fetchAiringToday();
-        const metas = animeList.map(anime => ({
-            id: anime.id,
-            type: 'series',
-            name: anime.name,
-            poster: anime.poster,
-            background: anime.background,
-            description: anime.isPlaceholder ? 'Žádný obsah' : `${anime.genres?.join(', ')} • Rating: ${anime.rating}`,
-            genres: anime.genres
-        }));
-        res.json({ metas });
-    } else {
-        res.json({ metas: [] });
-    }
-});
-
-app.get('/catalog/:type/:id/:extra.json', async (req, res) => {
-    if (req.params.id === 'anilist_today') {
-        const animeList = await fetchAiringToday();
-        const metas = animeList.map(anime => ({
-            id: anime.id,
-            type: 'series',
-            name: anime.name,
-            poster: anime.poster,
-            background: anime.background,
-            description: anime.isPlaceholder ? 'Žádný obsah' : `${anime.genres?.join(', ')} • Rating: ${anime.rating}`,
-            genres: anime.genres
-        }));
-        res.json({ metas });
-    } else {
-        res.json({ metas: [] });
-    }
-});
-
-app.get('/meta/:type/:id.json', async (req, res) => {
-    const animeId = req.params.id;
-    
-    if (animeId.startsWith('anilist:')) {
-        const animeList = await fetchAiringToday();
-        const anime = animeList.find(a => a.id === animeId);
-
-        if (anime) {
-            if (anime.isPlaceholder) {
-                return res.json({ meta: null });
-            }
-
-            const videoId = `${anime.id}:1:${anime.episode}`;
-            
-            const airTime = new Date(anime.airingAt * 1000).toLocaleTimeString('cs-CZ', { 
-                hour: '2-digit', minute: '2-digit' 
-            });
-
-            res.json({
-                meta: {
-                    id: anime.id,
-                    type: 'series',
-                    name: anime.name,
-                    poster: anime.poster,
-                    background: anime.background,
-                    description: `${anime.description}\n\n\n📺 Vychází dnes v ${airTime} (lokalizováno)\n⭐ Hodnocení: ${anime.rating}/100\n🎬 Studio: ${anime.studio}`,
-                    genres: anime.genres,
-                    releaseInfo: anime.year ? anime.year.toString() : '',
-                    videos: [{
-                        id: videoId,
-                        title: `Epizoda ${anime.episode}`,
-                        season: 1,
-                        episode: parseInt(anime.episode),
-                        released: new Date(anime.airingAt * 1000).toISOString(),
-                        overview: `Dnes vychází epizoda ${anime.episode} ze ${anime.totalEpisodes || '?'}.`,
-                        thumbnail: anime.poster
-                    }]
-                }
-            });
+    try {
+        if (req.params.id === 'anilist_today') {
+            const animeList = await fetchAiringToday();
+            const metas = animeList.map(anime => ({
+                id: anime.id,
+                type: 'series',
+                name: anime.name,
+                poster: anime.poster,
+                background: anime.background,
+                description: anime.isPlaceholder ? 'Žádný obsah' : `${anime.genres?.join(', ') || ''} • Rating: ${anime.rating || 0}`,
+                genres: anime.genres
+            }));
+            return res.json({ metas }); // EXPLICIT RETURN
+        } else {
+            return res.json({ metas: [] }); // EXPLICIT RETURN
         }
+    } catch (error) {
+        console.error('Route Error:', error);
+        if (!res.headersSent) return res.status(500).json({ metas: [] });
     }
-    res.status(404).json({ meta: null });
 });
 
+// Katalog - Cesta s extra parametry
+app.get('/catalog/:type/:id/:extra.json', async (req, res) => {
+    try {
+        if (req.params.id === 'anilist_today') {
+            const animeList = await fetchAiringToday();
+            const metas = animeList.map(anime => ({
+                id: anime.id,
+                type: 'series',
+                name: anime.name,
+                poster: anime.poster,
+                background: anime.background,
+                description: anime.isPlaceholder ? 'Žádný obsah' : `${anime.genres?.join(', ') || ''} • Rating: ${anime.rating || 0}`,
+                genres: anime.genres
+            }));
+            return res.json({ metas }); // EXPLICIT RETURN
+        } else {
+            return res.json({ metas: [] }); // EXPLICIT RETURN
+        }
+    } catch (error) {
+        console.error('Route Error:', error);
+        if (!res.headersSent) return res.status(500).json({ metas: [] });
+    }
+});
+
+// Detail
+app.get('/meta/:type/:id.json', async (req, res) => {
+    try {
+        const animeId = req.params.id;
+        
+        if (animeId.startsWith('anilist:')) {
+            const animeList = await fetchAiringToday();
+            const anime = animeList.find(a => a.id === animeId);
+
+            if (anime) {
+                if (anime.isPlaceholder) {
+                    return res.json({ meta: null });
+                }
+
+                const videoId = `${anime.id}:1:${anime.episode}`;
+                
+                const airTime = new Date(anime.airingAt * 1000).toLocaleTimeString('cs-CZ', { 
+                    hour: '2-digit', minute: '2-digit' 
+                });
+
+                return res.json({
+                    meta: {
+                        id: anime.id,
+                        type: 'series',
+                        name: anime.name,
+                        poster: anime.poster,
+                        background: anime.background,
+                        description: `${anime.description}\n\n\n📺 Vychází dnes v ${airTime} (lokalizováno)\n⭐ Hodnocení: ${anime.rating}/100\n🎬 Studio: ${anime.studio}`,
+                        genres: anime.genres,
+                        releaseInfo: anime.year ? anime.year.toString() : '',
+                        videos: [{
+                            id: videoId,
+                            title: `Epizoda ${anime.episode}`,
+                            season: 1,
+                            episode: parseInt(anime.episode),
+                            released: new Date(anime.airingAt * 1000).toISOString(),
+                            overview: `Dnes vychází epizoda ${anime.episode} ze ${anime.totalEpisodes || '?'}.`,
+                            thumbnail: anime.poster
+                        }]
+                    }
+                });
+            }
+        }
+        return res.status(404).json({ meta: null });
+    } catch (error) {
+        console.error('Meta Route Error:', error);
+        if (!res.headersSent) return res.status(500).json({ meta: null });
+    }
+});
+
+// Stream
 app.get('/stream/:type/:id.json', (req, res) => {
-    res.json({ streams: [] });
+    return res.json({ streams: [] });
 });
 
+// Health
 app.get('/health', (req, res) => {
-    res.json({ status: 'ok', cacheSize: animeCache.data.length });
+    return res.json({ status: 'ok', cacheSize: animeCache.data.length });
+});
+
+// Globální error handler, aby aplikace nespadla
+app.use((err, req, res, next) => {
+    console.error('Global Error:', err);
+    if (!res.headersSent) {
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
 });
 
 app.listen(PORT, '0.0.0.0', () => {
