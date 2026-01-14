@@ -13,9 +13,9 @@ const PORT = process.env.PORT || 3000;
 
 const ADDON_CONFIG = {
     id: 'org.anilist.stream.today',
-    version: '3.1.0',
-    name: 'AniList Dnes + Nyaa Multi',
-    description: 'Metadata z AniList + Více streamů z Nyaa',
+    version: '3.2.0',
+    name: 'AniList Dnes + Nyaa Dual Search',
+    description: 'Metadata z AniList + Dual Search (Romaji/English) na Nyaa',
     logo: 'https://anilist.co/img/icons/android-icon-192x192.png',
     background: 'https://anilist.co/img/logo_al.png',
     resources: ['catalog', 'meta', 'stream'], 
@@ -23,7 +23,7 @@ const ADDON_CONFIG = {
     catalogs: [{
         type: 'series',
         id: 'anilist_today',
-        name: 'Dnes vychází (Multi Stream)',
+        name: 'Dnes vychází (Dual Search)',
         extra: [{ name: 'search', isRequired: false }] 
     }]
 };
@@ -85,7 +85,7 @@ async function fetchAiringToday() {
             headers: { 
                 'Content-Type': 'application/json', 
                 'Accept': 'application/json',
-                'User-Agent': 'Stremio-AniList-Addon/3.1'
+                'User-Agent': 'Stremio-AniList-Addon/3.2'
             }
         });
 
@@ -111,7 +111,7 @@ async function fetchAiringToday() {
                 anilistId: media.id,
                 name: title,
                 romaji: media.title.romaji,
-                english: media.title.english,
+                english: media.title.english, // Uložíme pro fallback vyhledávání
                 episode: safeEpisode,
                 airingAt: item.airingAt,
                 poster: media.coverImage.extraLarge || media.coverImage.large,
@@ -142,64 +142,65 @@ async function fetchAiringToday() {
     }
 }
 
-// --- NYAA STREAM LOGIKA (OPRAVENÁ PRO VÍCE STREAMŮ) ---
-async function findStreamOnNyaa(animeName, episode) {
-    try {
-        // Vyhledávací dotaz
-        const searchQuery = encodeURIComponent(`${animeName} - ${episode}`);
-        
-        // Přidáno s=seeders&o=desc pro seřazení podle seeders (nejlepší nahoře)
+// --- NYAA DUAL SEARCH LOGIC ---
+async function findStreamOnNyaa(animeRomaji, animeEnglish, episode) {
+    
+    // Pomocná funkce pro jeden dotaz
+    const performSearch = async (searchName) => {
+        const searchQuery = encodeURIComponent(`${searchName} - ${episode}`);
         const rssUrl = `https://nyaa.si/?page=rss&q=${searchQuery}&s=seeders&o=desc`;
 
-        console.log(`🧲 Hledám streamy na Nyaa: ${animeName} - ${episode}`);
+        console.log(`🧲 Hledám: ${searchName} - ${episode}`);
 
-        const response = await axios.get(rssUrl, { 
-            timeout: 8000, 
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
-        });
+        try {
+            const response = await axios.get(rssUrl, { 
+                timeout: 8000, 
+                headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+            });
 
-        const $ = cheerio.load(response.data, { xmlMode: true });
-        
-        const streams = [];
-        
-        // Iterujeme přes VŠECHNY nalezené položky (items)
-        $('item').each((index, element) => {
-            // Omezíme na max 5 výsledků, aby Stremio nebylo pomalé
-            if (index >= 5) return false;
-
-            const $el = $(element);
-            const title = $el.find('title').text();
+            const $ = cheerio.load(response.data, { xmlMode: true });
+            const streams = [];
             
-            // Získáme magnet (z enclosure nebo link)
-            let magnetUrl = $el.find('enclosure').attr('url');
-            if (!magnetUrl) {
-                const linkUrl = $el.find('link').text();
-                // Pokud je to .torrent soubor, můžeme ho použít jako fallback, ale magnet je lepší
-                if (linkUrl && linkUrl.includes('magnet')) magnetUrl = linkUrl;
-            }
+            $('item').each((index, element) => {
+                if (index >= 5) return false;
+                const $el = $(element);
+                const title = $el.find('title').text();
+                let magnetUrl = $el.find('enclosure').attr('url');
+                
+                if (!magnetUrl) {
+                    const linkUrl = $el.find('link').text();
+                    if (linkUrl && linkUrl.includes('magnet')) magnetUrl = linkUrl;
+                }
 
-            if (magnetUrl) {
-                // Detekce kvality z názvu pro lepší název streamu
-                let quality = 'Torrent';
-                if (title.includes('1080p')) quality = '1080p';
-                else if (title.includes('720p')) quality = '720p';
-                else if (title.includes('480p')) quality = '480p';
+                if (magnetUrl) {
+                    let quality = 'Torrent';
+                    if (title.includes('1080p')) quality = '1080p';
+                    else if (title.includes('720p')) quality = '720p';
+                    else if (title.includes('480p')) quality = '480p';
 
-                streams.push({
-                    name: `🧲 Nyaa ${quality}`, // Např. Nyaa 1080p
-                    title: title, // Celý název z Nyaa (včetně fansub skupiny)
-                    url: magnetUrl
-                });
-            }
-        });
+                    streams.push({
+                        name: `🧲 Nyaa ${quality}`,
+                        title: title,
+                        url: magnetUrl
+                    });
+                }
+            });
+            return streams;
+        } catch (error) {
+            return [];
+        }
+    };
 
-        console.log(`✅ Nalezeno ${streams.length} torrentů`);
-        return streams;
+    // 1. Zkusíme Romaji
+    let streams = await performSearch(animeRomaji);
 
-    } catch (error) {
-        console.log(`⚠️ Nyaa Search Error (${animeName}):`, error.message);
-        return [];
+    // 2. Pokud nic a existuje English název, zkusíme English
+    if (streams.length === 0 && animeEnglish && animeEnglish !== animeRomaji) {
+        console.log(`⚠️ Romaji nic nenašlo, zkouším English...`);
+        streams = await performSearch(animeEnglish);
     }
+
+    return streams;
 }
 
 // --- ROUTES ---
@@ -210,7 +211,7 @@ app.get('/', (req, res) => {
 <html lang="cs">
 <head>
     <meta charset="UTF-8">
-    <title>AniList + Nyaa Multi</title>
+    <title>AniList + Nyaa Dual</title>
     <style>
         body { font-family: sans-serif; background: #121212; color: #fff; text-align: center; padding: 40px; }
         h1 { color: #60a5fa; margin-bottom: 10px; }
@@ -221,8 +222,8 @@ app.get('/', (req, res) => {
     </style>
 </head>
 <body>
-    <h1>AniList + Nyaa Multi</h1>
-    <p>Ukazuje více variant torrentů</p>
+    <h1>AniList + Nyaa Dual Search</h1>
+    <p>Automaticky zkouší Romaji i English názvy</p>
     <div class="box">
         <div>Manifest URL:</div>
         <div class="code">${baseUrl}/manifest.json</div>
@@ -318,19 +319,20 @@ app.get('/stream/:type/:id.json', async (req, res) => {
             const anime = animeList.find(a => a.id === animeId);
 
             if (anime && !anime.isPlaceholder) {
-                // Voláme funkci, která nyní vrací VÍCE streamů
-                const streams = await findStreamOnNyaa(anime.romaji || anime.name, anime.episode);
+                console.log(`🔍 Hledám: ${anime.name} E${anime.episode}`);
+                
+                // POUŽITÍ DUAL SEARCH (Romaji + English)
+                const streams = await findStreamOnNyaa(anime.romaji || anime.name, anime.english, anime.episode);
 
                 if (streams.length > 0) {
                     return res.json({ streams });
                 } else {
-                    const fallbackUrl = `https://nyaa.si/?q=${encodeURIComponent(anime.romaji + ' ' + anime.episode)}`;
+                    // HLÁŠKA ŽE TORRENT NENÍ + ODEBRÁNO RUČNÍ HLEDÁNÍ
                     return res.json({
                         streams: [{
-                            name: '🔍 Hledat na Nyaa Manuálně',
-                            title: 'Torrent automaticky nenalezen',
-                            url: fallbackUrl,
-                            behaviorHints: { notWebReady: true }
+                            name: 'Torrent zatím není k dispozici',
+                            title: 'Zkuste to znovu později (Hledáno i v English názvu)',
+                            url: 'data:text/plain,Not Available' // Dummy URL pro zobrazení hlášky
                         }]
                     });
                 }
@@ -338,6 +340,7 @@ app.get('/stream/:type/:id.json', async (req, res) => {
         }
         return res.json({ streams: [] });
     } catch (error) {
+        console.error('Stream Error:', error);
         if (!res.headersSent) return res.status(500).json({ streams: [] });
     }
 });
@@ -353,6 +356,6 @@ app.use((err, req, res, next) => {
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 AniList + Nyaa Multi Addon běží na portu ${PORT}`);
+    console.log(`🚀 AniList + Nyaa Dual Addon běží na portu ${PORT}`);
     setTimeout(keepAlive, 2 * 60 * 1000);
 });
