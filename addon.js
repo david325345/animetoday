@@ -16,9 +16,9 @@ const PORT = process.env.PORT || 3000;
 // Konfigurace Addonu
 const ADDON_CONFIG = {
     id: 'org.anilist.meta.today',
-    version: '2.0.0',
-    name: 'AniList Dnes (IMDB ID)',
-    description: 'Katalog anime vycházejících dnes - Automatický překlad na IMDB',
+    version: '2.1.0',
+    name: 'AniList Dnes (Jen IMDB)',
+    description: 'Katalog pouze anime, která mají platné IMDB ID',
     logo: 'https://anilist.co/img/icons/android-icon-192x192.png',
     background: 'https://anilist.co/img/logo_al.png',
     resources: ['catalog', 'meta'], 
@@ -26,7 +26,7 @@ const ADDON_CONFIG = {
     catalogs: [{
         type: 'series',
         id: 'anilist_today',
-        name: 'Dnes vychází (AniList)',
+        name: 'Dnes vychází (IMDB Only)',
         extra: [{ name: 'search', isRequired: false }] 
     }]
 };
@@ -45,21 +45,18 @@ async function keepAlive() {
 }
 setInterval(keepAlive, 10 * 60 * 1000);
 
-// Pomocná funkce pro získání IMDB ID z MAL ID přes Malsync API
+// Pomocná funkce pro získání IMDB ID
 async function getImdbId(malId) {
     try {
-        // Zpoždění pro ochranu API (200ms)
+        // Zpoždění pro rate limit (200ms)
         await new Promise(resolve => setTimeout(resolve, 200));
         
         const response = await axios.get(`https://api.malsync.moe/mal/anime/${malId}`, { timeout: 5000 });
-        
-        // Malsync API má strukturu Sites.IMDb.id
         if (response.data && response.data.Sites && response.data.Sites.IMDb) {
-            return response.data.Sites.IMDb.id; // Vrací např. "tt12345678"
+            return response.data.Sites.IMDb.id; 
         }
         return null;
     } catch (error) {
-        // Pokud se nepodaří získat IMDB, ignorujeme (běžné u nového anime)
         return null;
     }
 }
@@ -116,7 +113,7 @@ async function fetchAiringToday() {
             headers: { 
                 'Content-Type': 'application/json', 
                 'Accept': 'application/json',
-                'User-Agent': 'Stremio-AniList-Addon/2.0'
+                'User-Agent': 'Stremio-AniList-Addon/2.1'
             }
         });
 
@@ -126,42 +123,38 @@ async function fetchAiringToday() {
             console.log('📭 Dnes dle AniList nevychází nic.');
             return [{
                 id: 'tt0',
-                name: 'Dnes nic nevychází',
-                poster: 'https://via.placeholder.com/300x400/000000/FFFFFF?text=Žádné+anime',
+                name: 'Nic s IMDB ID',
+                poster: 'https://via.placeholder.com/300x400/000000/FFFFFF?text=Žádné+IMDB',
                 isPlaceholder: true,
                 episode: 0
             }];
         }
 
-        // Asynchronní zpracování s mapováním na IMDB
-        // Používáme Promise.allSettled pro rychlost a odolnost proti chybám
         const processedData = await Promise.allSettled(
             schedule.map(async (item) => {
                 const media = item.media;
                 const malId = media.idMal;
                 const title = media.title.romaji || media.title.english;
                 
-                // --- ZÍSKÁNÍ IMDB ID ---
+                // ZÍSKÁNÍ IMDB ID
                 const imdbId = await getImdbId(malId);
                 
-                // --- ROZHODOVACÍ LOGIKA ID ---
-                // 1. Pokud existuje IMDB ID -> Použijeme tt12345678 (Funguje všude v Cinemeta/Stremiu)
-                // 2. Pokud IMDB ID NEEXISTUJE -> Použijeme anilist-12345 (Záloha pro Torrentio/Aliyun)
-                const finalId = imdbId ? imdbId : `anilist-${media.id}`;
-                
+                // --- FILTROVÁNÍ (POKUD ŽÁDÉ IMDB ID, NEVRACÍME NIC) ---
+                if (!imdbId) {
+                    console.log(`🗑️ ${title}: Přeskočeno (chybí IMDB ID)`);
+                    return null; 
+                }
+                // ----------------------------------------------------
+
                 const safeEpisode = item.episode || 1;
                 
-                if (imdbId) {
-                    console.log(`🎯 ${title}: IMDB ID ${imdbId} nalezeno.`);
-                } else {
-                    console.log(`⚠️ ${title}: IMDB ID nenalezeno, používám AniList ID.`);
-                }
+                console.log(`✅ ${title}: Používám IMDB ID ${imdbId}`);
                 
                 return {
-                    id: finalId, 
+                    id: imdbId, // Pouze IMDB ID
                     anilistId: media.id,
                     malId: malId,
-                    imdbId: imdbId || null,
+                    imdbId: imdbId,
                     name: title,
                     romaji: media.title.romaji,
                     episode: safeEpisode,
@@ -179,13 +172,25 @@ async function fetchAiringToday() {
             })
         );
 
+        // Filtrujeme null hodnoty (anime bez IMDB ID)
         const animeList = processedData
-            .filter(p => p.status === 'fulfilled')
+            .filter(p => p.status === 'fulfilled' && p.value !== null)
             .map(p => p.value);
+
+        if (animeList.length === 0) {
+            console.log('⚠️ Žádné anime z dnešního dne nemá IMDB ID.');
+            return [{
+                id: 'tt0',
+                name: 'Nic s IMDB ID',
+                poster: 'https://via.placeholder.com/300x400/000000/FFFFFF?text=Dnes+nic+na+IMDB',
+                isPlaceholder: true,
+                episode: 0
+            }];
+        }
 
         animeCache.data = animeList;
         animeCache.timestamp = now;
-        console.log(`✅ Načteno ${animeList.length} seriálů (Priorita IMDB ID)`);
+        console.log(`✅ Načteno ${animeList.length} seriálů (Pouze s IMDB ID)`);
         return animeList;
 
     } catch (error) {
@@ -221,16 +226,16 @@ app.get('/', (req, res) => {
     </style>
 </head>
 <body>
-    <h1>AniList Dnes (IMDB ID)</h1>
-    <p>Automatický překlad ID na IMDB pro Stremio Cinemeta</p>
+    <h1>AniList Dnes (Jen IMDB)</h1>
+    <p>Strictní filtr - zobrazuje pouze anime s IMDB ID</p>
     <div class="box">
         <div>Manifest URL:</div>
         <div class="code">${baseUrl}/manifest.json</div>
         <a href="stremio://${req.get('host')}/manifest.json" class="btn">🚀 Instalovat do Stremio</a>
     </div>
     <div class="info">
-        🔄 Addon se snaží najít IMDB ID pro maximální kompatibilitu.<br>
-        Pokud IMDB ID neexistuje, používá záložní AniList ID.
+        📌 Tento addon <strong>zahazuje</strong> anime, která nemají IMDB ID.<br>
+        Díky tomu by měl být katalog 100% kompatibilní s Cinemetou.
     </div>
 </body>
 </html>`);
@@ -242,7 +247,7 @@ const sendCatalog = async (res) => {
     try {
         const animeList = await fetchAiringToday();
         const metas = animeList.map(anime => ({
-            id: anime.id, // Zde je buď tt... nebo anilist-...
+            id: anime.id, // Pouze tt...
             type: 'series',
             name: anime.name,
             poster: anime.poster,
@@ -272,9 +277,8 @@ app.get('/catalog/:type/:id/:extra.json', async (req, res) => {
 app.get('/meta/:type/:id.json', async (req, res) => {
     try {
         const animeId = req.params.id;
-        
-        // Podpora pro tt (IMDB) i anilist- prefixy
-        if (animeId.startsWith('tt') || animeId.startsWith('anilist-')) {
+        // Pouze IMDB prefix (tt...)
+        if (animeId.startsWith('tt')) {
             const animeList = await fetchAiringToday();
             const anime = animeList.find(a => a.id === animeId);
 
@@ -297,7 +301,7 @@ app.get('/meta/:type/:id.json', async (req, res) => {
                         name: anime.name,
                         poster: anime.poster,
                         background: anime.background,
-                        description: `${anime.description}\n\n\n📺 Dnes vychází epizoda: **${validEpisode}**\n⏰ Čas: ${airTime}\n⭐ Hodnocení: ${anime.rating}/100\n🎬 Studio: ${anime.studio}\n🎞️ ID: ${anime.id}`,
+                        description: `${anime.description}\n\n\n📺 Dnes vychází epizoda: **${validEpisode}**\n⏰ Čas: ${airTime}\n⭐ Hodnocení: ${anime.rating}/100\n🎬 Studio: ${anime.studio}`,
                         genres: anime.genres,
                         releaseInfo: anime.year ? anime.year.toString() : '',
                         videos: [{
@@ -336,6 +340,6 @@ app.use((err, req, res, next) => {
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 AniList Metadata Addon (IMDB Mapper) běží na portu ${PORT}`);
+    console.log(`🚀 AniList Metadata Addon (Strict IMDB) běží na portu ${PORT}`);
     setTimeout(keepAlive, 2 * 60 * 1000);
 });
