@@ -31,7 +31,7 @@ const ADDON_CONFIG = {
     }]
 };
 
-// Cache (30 minut - Jikan má limity)
+// Cache (30 minut)
 let animeCache = { data: [], timestamp: 0, ttl: 30 * 60 * 1000 };
 
 // --- Keep-Alive (Render) ---
@@ -54,26 +54,22 @@ async function fetchAiringToday() {
     }
 
     try {
-        // 1. Zjistíme, jaký je dnes den v Japonsku (JST = UTC+9)
-        // Protože anime vysílají v Japonsku, musíme znát jejich den.
+        // 1. Výpočet dne v Japonsku (JST = UTC+9)
         const date = new Date();
         const utc = date.getTime() + (date.getTimezoneOffset() * 60000);
         const jstOffset = 9;
         const jstDate = new Date(utc + (3600000 * jstOffset));
         
         const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-        const todayDay = days[jstDate.getDay()]; // např. 'tuesday'
+        const todayDay = days[jstDate.getDay()]; 
 
         console.log(`🕒 Dnes v Japonsku (JST) je: ${todayDay.toUpperCase()}`);
 
-        // 2. Dotaz na Jikan API (Schedule endpoint)
-        // Limitujeme na 25 položek pro rychlost a bezpečnost rate-limitu
+        // 2. Dotaz na Jikan API
         const url = `https://api.jikan.moe/v4/schedules/${todayDay}?filter=tv&limit=25&sfw=true`;
         
         const response = await axios.get(url, {
-            headers: { 
-                'User-Agent': 'Stremio-MAL-Addon/1.0' 
-            }
+            headers: { 'User-Agent': 'Stremio-MAL-Addon/1.0' }
         });
 
         const schedule = response.data.data;
@@ -89,25 +85,23 @@ async function fetchAiringToday() {
             }];
         }
 
+        // --- OPRAVA DAT ---
+        // Jikan API vrací objekty přímo v poli, ne zanořené v 'data'
         const animeList = schedule.map(item => {
-            const data = item.data; // Jikan vrací data uvnitř pole
-            
-            // ID prefixujeme jako 'mal:'
+            // Zde jsem předtím dělal item.data, což bylo špatně
             return {
-                id: `mal:${data.mal_id}`,
-                malId: data.mal_id,
-                name: data.title,
-                poster: data.images.jpg.large_image_url,
-                background: data.images.jpg.large_image_url, // MAL často nemá banner v schedule, použijeme poster
-                description: (data.synopsis || 'Popis není k dispozici.').replace(/<[^>]*>?/gm, '').substring(0, 800),
-                genres: data.genres.map(g => g.name),
-                rating: data.score ? (data.score * 10) : 0, // MAL score je 0-10, Stremio chce často 0-100
-                year: data.year,
-                studio: data.studios.map(s => s.name).join(', '),
-                totalEpisodes: data.episodes,
+                id: `mal:${item.mal_id}`,
+                malId: item.mal_id,
+                name: item.title,
+                poster: item.images?.jpg?.large_image_url || item.images?.jpg?.image_url,
+                background: item.images?.jpg?.large_image_url, 
+                description: (item.synopsis || 'Popis není k dispozici.').replace(/<[^>]*>?/gm, '').substring(0, 800),
+                genres: item.genres?.map(g => g.name) || [],
+                rating: item.score ? (item.score * 10) : 0, 
+                year: item.year,
+                studio: item.studios?.map(s => s.name).join(', ') || 'Neznámé',
+                totalEpisodes: item.episodes,
                 isPlaceholder: false,
-                // Poznámka: MAL schedule endpoint neříká přesné číslo dnešní epizody, jen že to běží.
-                // Proto zobrazíme obecný text.
                 episodeText: 'Nová Epizoda' 
             };
         });
@@ -119,11 +113,10 @@ async function fetchAiringToday() {
 
     } catch (error) {
         console.error('❌ MAL (Jikan) Error:', error.message);
-        // Jikan API je často plný (Rate Limit 429), vracíme fallback
         return [{
             id: 'mal:error',
-            name: 'MAL API Přetíženo',
-            poster: 'https://via.placeholder.com/300x400/FFA500/FFFFFF?text=API+Limit',
+            name: 'MAL API Chyba',
+            poster: 'https://via.placeholder.com/300x400/FFA500/FFFFFF?text=API+Error',
             isPlaceholder: true,
             malId: 0
         }];
@@ -145,7 +138,6 @@ app.get('/', (req, res) => {
         .box { background: #1e1e1e; padding: 30px; border-radius: 15px; display: inline-block; margin-top: 20px; border: 1px solid #333; }
         .code { color: #a5f3fc; font-family: monospace; background: #000; padding: 10px 15px; border-radius: 6px; font-size: 1.1em; display: block; margin: 15px 0; }
         a.btn { color: #fff; background: #2e51a2; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block; margin-top: 10px; }
-        a.btn:hover { background: #1e3d82; }
     </style>
 </head>
 <body>
@@ -162,60 +154,41 @@ app.get('/', (req, res) => {
 
 app.get('/manifest.json', (req, res) => res.json(ADDON_CONFIG));
 
-// Katalog
-app.get('/catalog/:type/:id.json', async (req, res) => {
+// Pomocná funkce pro generování katalogu (zabrání duplicitě kódu)
+const sendCatalog = async (res) => {
     try {
-        if (req.params.id === 'mal_today') {
-            const animeList = await fetchAiringToday();
-            const metas = animeList.map(anime => ({
-                id: anime.id,
-                type: 'series',
-                name: anime.name,
-                poster: anime.poster,
-                background: anime.background,
-                description: anime.isPlaceholder 
-                    ? 'Žádný obsah' 
-                    : `${anime.episodeText} • ${anime.genres?.join(', ') || ''} • ⭐ ${anime.rating || 0}/100`,
-                genres: anime.genres
-            }));
-            return res.json({ metas });
-        } else {
-            return res.json({ metas: [] });
-        }
+        const animeList = await fetchAiringToday();
+        const metas = animeList.map(anime => ({
+            id: anime.id,
+            type: 'series',
+            name: anime.name,
+            poster: anime.poster,
+            background: anime.background,
+            description: anime.isPlaceholder 
+                ? 'Žádný obsah' 
+                : `${anime.episodeText} • ${anime.genres?.join(', ') || ''} • ⭐ ${anime.rating || 0}/100`,
+            genres: anime.genres
+        }));
+        return res.json({ metas });
     } catch (error) {
         console.error('Route Error:', error);
         if (!res.headersSent) return res.status(500).json({ metas: [] });
     }
+};
+
+app.get('/catalog/:type/:id.json', async (req, res) => {
+    if (req.params.id === 'mal_today') {
+        return sendCatalog(res);
+    } else {
+        return res.json({ metas: [] });
+    }
 });
 
 app.get('/catalog/:type/:id/:extra.json', async (req, res) => {
-    // Stejná logika jako bez extra
-    return app._router.handle(req, res); // Přepošleme na předchozí funkci, nebo ji zkopírujeme
-});
-
-// Kopie pro cestu s extra parametry (kvůli express routeru)
-app.get('/catalog/:type/:id/:extra.json', async (req, res) => {
-    try {
-        if (req.params.id === 'mal_today') {
-            const animeList = await fetchAiringToday();
-            const metas = animeList.map(anime => ({
-                id: anime.id,
-                type: 'series',
-                name: anime.name,
-                poster: anime.poster,
-                background: anime.background,
-                description: anime.isPlaceholder 
-                    ? 'Žádný obsah' 
-                    : `${anime.episodeText} • ${anime.genres?.join(', ') || ''} • ⭐ ${anime.rating || 0}/100`,
-                genres: anime.genres
-            }));
-            return res.json({ metas });
-        } else {
-            return res.json({ metas: [] });
-        }
-    } catch (error) {
-        console.error('Route Error:', error);
-        if (!res.headersSent) return res.status(500).json({ metas: [] });
+    if (req.params.id === 'mal_today') {
+        return sendCatalog(res);
+    } else {
+        return res.json({ metas: [] });
     }
 });
 
@@ -233,10 +206,8 @@ app.get('/meta/:type/:id.json', async (req, res) => {
                     return res.json({ meta: null });
                 }
 
-                // ID pro video (zachováme mal: id)
                 const videoId = `${anime.id}:1:1`;
                 
-                // MAL API nevrací přesný čas epizody v schedule endpointu, jen den.
                 return res.json({
                     meta: {
                         id: anime.id,
@@ -251,7 +222,7 @@ app.get('/meta/:type/:id.json', async (req, res) => {
                             id: videoId,
                             title: `Dnes vychází`,
                             season: 1,
-                            episode: 1, // V Schedule endpointu neznáme číslo, nastavíme 1
+                            episode: 1, 
                             released: new Date().toISOString(),
                             overview: `${anime.name} má dnes v Japonsku premiéru.`,
                             thumbnail: anime.poster
