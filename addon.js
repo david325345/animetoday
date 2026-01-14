@@ -1,135 +1,264 @@
 const express = require('express');
-const { serveHTTP } = require('stremio-addon-sdk');
 const axios = require('axios');
+const cors = require('cors');
 
 const app = express();
+app.use(cors());
+app.use(express.json());
 
-// --- KONFIGURACE ---
-const ADDON_NAME = "Anime Dnes (AniList)";
-const ADDON_ID = "com.example.anilist-today";
+const PORT = process.env.PORT || 3000;
 
-// --- POMOCNÉ FUNKCE ---
-function getTodayRangeJST() {
-    const now = new Date();
-    const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
-    const jstTime = new Date(utc + (3600000 * 9)); 
-    
-    jstTime.setHours(0, 0, 0, 0);
-    const startOfDay = Math.floor(jstTime.getTime() / 1000);
-    const endOfDay = startOfDay + 86400 - 1; 
-    return { startOfDay, endOfDay };
-}
-
-// --- MANIFEST ---
-const manifest = {
-    id: ADDON_ID,
+// Konfigurace Addonu
+const ADDON_CONFIG = {
+    id: 'org.anilist.meta.today',
     version: '1.0.0',
-    name: ADDON_NAME,
-    description: 'Zobrazuje anime vysílaná dnes',
-    resources: ['catalog', 'meta'],
+    name: 'AniList Dnes (Metadata)',
+    description: 'Katalog anime vycházejících dnes - pouze metadata',
+    logo: 'https://anilist.co/img/icons/android-icon-192x192.png',
+    background: 'https://anilist.co/img/logo_al.png',
+    resources: ['catalog', 'meta'], // POZNÁMKA: Odstraněno 'stream'
     types: ['series'],
-    catalogs: [
-        {
-            type: 'series',
-            id: 'anilist-today',
-            name: 'Anime Dnes',
-            extra: [{ name: 'search' }]
-        }
-    ],
-    idPrefixes: ['anilist:']
+    catalogs: [{
+        type: 'series',
+        id: 'anilist_today',
+        name: 'Dnes vychází (AniList)',
+        extra: [{ name: 'search', isRequired: false }] // Volitelné pro vyhledávání
+    }]
 };
 
-// --- HANDLERY ---
-async function catalogHandler(args) {
-    const { startOfDay, endOfDay } = getTodayRangeJST();
+// Cache (20 minut)
+let animeCache = { data: [], timestamp: 0, ttl: 20 * 60 * 1000 };
 
-    const query = `
-    query ($page: Int, $perPage: Int) {
-        Page(page: $page, perPage: $perPage) {
-            media(type: ANIME, status: RELEASING, sort: POPULARITY_DESC) {
-                id
-                title { romaji }
-                coverImage { large }
-                nextAiringEpisode { airingAt episode }
-                description
-                genres
-            }
-        }
+// --- Keep-Alive (Render) ---
+async function keepAlive() {
+    try {
+        const baseUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+        await axios.get(`${baseUrl}/health`, { timeout: 5000 });
+        console.log(`🏓 Keep-alive ping`);
+    } catch (error) {
+        console.log(`⚠️ Keep-alive selhal`);
     }
-    `;
+}
+setInterval(keepAlive, 10 * 60 * 1000);
+
+// --- AniList API ---
+async function fetchAiringToday() {
+    const now = Date.now();
+    if (animeCache.data.length > 0 && (now - animeCache.timestamp) < animeCache.ttl) {
+        return animeCache.data;
+    }
 
     try {
+        // Časové okno pro "Dnes" (UTC)
+        const todayStart = Math.floor(new Date().setHours(0, 0, 0, 0) / 1000);
+        const todayEnd = Math.floor(new Date().setHours(23, 59, 59, 999) / 1000);
+
+        // GraphQL Dotaz - žádáme o všechny potřebné metadata
+        const query = `
+            query ($from: Int, $to: Int) {
+                Page(page: 1, perPage: 50) {
+                    airingSchedule(airingAt_greater: $from, airingAt_lesser: $to, sort: TIME) {
+                        airingAt
+                        episode
+                        media {
+                            id
+                            title { romaji, english, native }
+                            description
+                            coverImage { extraLarge, large, color }
+                            bannerImage
+                            genres
+                            averageScore
+                            format
+                            status
+                            episodes
+                            seasonYear
+                            studios { nodes { name } }
+                            tags { nodes { name } }
+                        }
+                    }
+                }
+            }
+        `;
+
         const response = await axios.post('https://graphql.anilist.co', {
             query: query,
-            variables: { page: 1, perPage: 50 }
+            variables: { from: todayStart, to: todayEnd }
+        }, {
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }
         });
-        const allMedia = response.data.data.Page.media;
-        const todayAnime = allMedia.filter(anime => {
-            if (!anime.nextAiringEpisode) return false;
-            const airingTime = anime.nextAiringEpisode.airingAt;
-            return airingTime >= startOfDay && airingTime <= endOfDay;
+
+        const schedule = response.data.data.Page.airingSchedule;
+        
+        if (!schedule || schedule.length === 0) {
+            return [{
+                id: 'anilist:empty',
+                name: 'Dnes nic nevychází',
+                poster: 'https://via.placeholder.com/300x400/000000/FFFFFF?text=Žádné+anime',
+                isPlaceholder: true
+            }];
+        }
+
+        // Mapování dat do formátu pro Stremio
+        const animeList = schedule.map(item => {
+            const media = item.media;
+            const title = media.title.english || media.title.romaji;
+            
+            return {
+                id: `anilist:${media.id}`, // Toto ID použiješ v dalším addonu pro streamování
+                anilistId: media.id,
+                name: title,
+                romaji: media.title.romaji,
+                native: media.title.native,
+                episode: item.episode,
+                airingAt: item.airingAt,
+                poster: media.coverImage.extraLarge || media.coverImage.large,
+                background: media.bannerImage || media.coverImage.extraLarge,
+                description: (media.description || '').replace(/<[^>]*>?/gm, '').substring(0, 1000), // Odstraníme HTML a zkrátíme
+                genres: media.genres,
+                rating: media.averageScore,
+                year: media.seasonYear,
+                studio: media.studios.nodes.map(n => n.name).join(', '),
+                tags: media.tags.nodes.map(n => n.name).join(', '),
+                totalEpisodes: media.episodes,
+                isPlaceholder: false
+            };
         });
-        const metas = todayAnime.map(anime => ({
-            id: `anilist:${anime.id}`,
-            type: 'series',
-            name: anime.title.romaji,
-            poster: anime.coverImage.large,
-            description: `Další díl: Ep. ${anime.nextAiringEpisode.episode}\n\n${anime.description?.slice(0, 300)}...`,
-            genres: anime.genres
-        }));
-        return { metas };
+
+        animeCache.data = animeList;
+        animeCache.timestamp = now;
+        console.log(`✅ Načteno ${animeList.length} seriálů z AniList`);
+        return animeList;
+
     } catch (error) {
-        console.error("Chyba AniList:", error.message);
-        return { metas: [] };
+        console.error('❌ AniList Error:', error.message);
+        return [{
+            id: 'anilist:error',
+            name: 'Chyba API',
+            poster: 'https://via.placeholder.com/300x400/FF0000/FFFFFF?text=Chyba',
+            isPlaceholder: true
+        }];
     }
 }
 
-async function metaHandler(args) {
-    if (!args.id.startsWith('anilist:')) return { meta: null };
-    const anilistId = args.id.split(':')[1];
+// --- ROUTES ---
+
+// Úvodní stránka
+app.get('/', (req, res) => {
+    const baseUrl = req.protocol + '://' + req.get('host');
+    res.send(`<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AniList Metadata</title>
+    <style>
+        body { font-family: sans-serif; background: #121212; color: #fff; text-align: center; padding: 40px; }
+        h1 { color: #60a5fa; }
+        .box { background: #1e1e1e; padding: 20px; border-radius: 10px; display: inline-block; margin-top: 20px; }
+        .code { color: #a5f3fc; font-family: monospace; background: #000; padding: 5px 10px; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <h1>AniList Metadata Addon</h1>
+    <p>Tento addon poskytuje pouze metadata (katalog, popisky, obrázky).</p>
+    <p><strong>Streamování</strong> musí být vyřešeno v dalším addonu.</p>
     
-    const query = `
-    query ($id: Int) {
-        Media(id: $id, type: ANIME) {
-            id title { romaji english }
-            coverImage { large extraLarge }
-            bannerImage description genres averageScore status
-        }
-    }
-    `;
-    try {
-        const response = await axios.post('https://graphql.anilist.co', {
-            query: query,
-            variables: { id: parseInt(anilistId) }
-        });
-        const data = response.data.data.Media;
-        return {
-            meta: {
-                id: `anilist:${data.id}`, type: 'series', name: data.title.romaji,
-                poster: data.coverImage.large, background: data.bannerImage,
-                description: data.description, genres: data.genres,
-                rating: data.averageScore ? (data.averageScore / 10).toFixed(1) : null,
-                runtime: 24
-            }
-        };
-    } catch (error) {
-        return { meta: null };
-    }
-}
-
-// --- SERVER SETUP ---
-app.use((req, res, next) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Headers', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
-    if (req.method === 'OPTIONS') return res.status(200).end();
-    next();
+    <div class="box">
+        <p>Instalační URL:</p>
+        <div class="code">${baseUrl}/manifest.json</div>
+        <br><br>
+        <a href="${baseUrl}/manifest.json" style="color:#121212; background:#60a5fa; padding:10px 20px; text-decoration:none; border-radius:5px;">Otevřít v Stremio</a>
+    </div>
+</body>
+</html>`);
 });
 
-app.get('/', (req, res) => res.send('Stremio Addon běží'));
+app.get('/manifest.json', (req, res) => res.json(ADDON_CONFIG));
 
-// TOTO JE ZMĚNA PRO SDK 1.5.0 - serveHTTP správně namapované
-app.use('/', serveHTTP(manifest, { catalog: catalogHandler, meta: metaHandler }));
+// Katalog (Seznam anime v "Dnes vychází")
+app.get('/catalog/:type/:id.json', async (req, res) => {
+    if (req.params.id === 'anilist_today') {
+        const animeList = await fetchAiringToday();
+        
+        // Formát pro Stremio katalog
+        const metas = animeList.map(anime => ({
+            id: anime.id,
+            type: 'series',
+            name: anime.name,
+            poster: anime.poster,
+            background: anime.background,
+            // Krátký popis do katalogu
+            description: anime.isPlaceholder ? 'Žádný obsah' : `${anime.genres?.join(', ')} • Rating: ${anime.rating}`,
+            genres: anime.genres
+        }));
+        
+        res.json({ metas });
+    } else {
+        res.json({ metas: [] });
+    }
+});
 
-const PORT = process.env.PORT || 7000;
-app.listen(PORT, () => console.log(`Server běží na portu ${PORT}`));
+// Detail (Plná metadata po kliknutí na anime)
+app.get('/meta/:type/:id.json', async (req, res) => {
+    const animeId = req.params.id;
+    
+    // Pokud je ID z našeho formátu
+    if (animeId.startsWith('anilist:')) {
+        const animeList = await fetchAiringToday();
+        const anime = animeList.find(a => a.id === animeId);
+
+        if (anime) {
+            if (anime.isPlaceholder) {
+                return res.json({ meta: null });
+            }
+
+            // Vytvoření objektu video pro dnešní epizodu
+            const videoId = `${anime.id}:1:${anime.episode}`;
+            
+            // Formatování času vysílání
+            const airTime = new Date(anime.airingAt * 1000).toLocaleTimeString('cs-CZ', { 
+                hour: '2-digit', minute: '2-digit' 
+            });
+
+            res.json({
+                meta: {
+                    id: anime.id,
+                    type: 'series',
+                    name: anime.name,
+                    poster: anime.poster,
+                    background: anime.background,
+                    description: `${anime.description}\n\n\n📺 Vychází dnes v ${airTime} (UTC)\n⭐ Hodnocení: ${anime.rating}/100\n🎬 Studio: ${anime.studio}`,
+                    genres: anime.genres,
+                    releaseInfo: anime.year ? anime.year.toString() : '',
+                    videos: [{
+                        id: videoId, // TOTO JE ID, KTERÉ POUŽIJE TVŮJ DALŠÍ ADDON PRO STREAMOVÁNÍ
+                        title: `Epizoda ${anime.episode}`,
+                        season: 1,
+                        episode: parseInt(anime.episode),
+                        released: new Date(anime.airingAt * 1000).toISOString(),
+                        overview: `Dnes vychází epizoda ${anime.episode} ze ${anime.totalEpisodes || '?'}.`,
+                        thumbnail: anime.poster
+                    }]
+                }
+            });
+        }
+    }
+    res.status(404).json({ meta: null });
+});
+
+// Stream endpoint - Vrací prázdné pole, protože tento addon neposkytuje streamy
+// Stremio to vyžaduje, aby nezahltil logy chybami
+app.get('/stream/:type/:id.json', (req, res) => {
+    // Pokud chceš, můžeš sem přidat logiku, která vrátí "error" zprávu,
+    // ale prázdné pole je nejčistší řešení pro "Metadata Only" addon.
+    res.json({ streams: [] });
+});
+
+app.get('/health', (req, res) => {
+    res.json({ status: 'ok', cacheSize: animeCache.data.length });
+});
+
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Metadata Addon běží na portu ${PORT}`);
+    setTimeout(keepAlive, 2 * 60 * 1000);
+});
