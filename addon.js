@@ -3,6 +3,13 @@ const axios = require('axios');
 const cors = require('cors');
 
 const app = express();
+
+// --- DŮLEŽITÁ OPRAVA PRO HTTPS NA RENDER ---
+// Říká Expressu, aby věřil hlavičkám z Render proxy (X-Forwarded-Proto).
+// Díky tomu req.protocol vrátí "https" místo "http".
+app.set('trust proxy', true);
+// -------------------------------------------
+
 app.use(cors());
 app.use(express.json());
 
@@ -32,6 +39,7 @@ let animeCache = { data: [], timestamp: 0, ttl: 20 * 60 * 1000 };
 // --- Keep-Alive (Render) ---
 async function keepAlive() {
     try {
+        // Používáme RENDER_EXTERNAL_URL, pokud existuje, pro správné pingování
         const baseUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
         await axios.get(`${baseUrl}/health`, { timeout: 5000 });
         console.log(`🏓 Keep-alive ping`);
@@ -140,6 +148,7 @@ async function fetchAiringToday() {
 // --- ROUTES ---
 
 app.get('/', (req, res) => {
+    // Díky app.set('trust proxy', true) bude baseUrl správně https
     const baseUrl = req.protocol + '://' + req.get('host');
     res.send(`<!DOCTYPE html>
 <html lang="cs">
@@ -152,15 +161,22 @@ app.get('/', (req, res) => {
         h1 { color: #60a5fa; }
         .box { background: #1e1e1e; padding: 20px; border-radius: 10px; display: inline-block; margin-top: 20px; }
         .code { color: #a5f3fc; font-family: monospace; background: #000; padding: 5px 10px; border-radius: 4px; }
+        .secure { color: #4ade80; margin-top: 10px; font-size: 0.9em; }
     </style>
 </head>
 <body>
     <h1>AniList Metadata Addon</h1>
+    <div class="secure" id="protocol-check">Detekovaný protokol: ...</div>
     <p>Tento addon poskytuje pouze metadata (katalog, popisky, obrázky).</p>
     <div class="box">
         <p>Instalační URL:</p>
         <div class="code">${baseUrl}/manifest.json</div>
+        <br><br>
+        <a href="stremio://${req.get('host')}/manifest.json" style="color:#121212; background:#60a5fa; padding:10px 20px; text-decoration:none; border-radius:5px;">Instalovat</a>
     </div>
+    <script>
+        document.getElementById('protocol-check').innerText = "Detekovaný protokol: " + window.location.protocol;
+    </script>
 </body>
 </html>`);
 });
@@ -188,9 +204,7 @@ app.get('/catalog/:type/:id.json', async (req, res) => {
     }
 });
 
-// Katalog - Cesta s extra parametry (OPRAVA PRO "FAILED TO FETCH")
-// Stremio někdy posílá požadavek ve formátu /catalog/series/anilist_today/search.json nebo podobně.
-// Pokud tato cesta neexistuje, vrátí 404.
+// Katalog - Cesta s extra parametry
 app.get('/catalog/:type/:id/:extra.json', async (req, res) => {
     if (req.params.id === 'anilist_today') {
         const animeList = await fetchAiringToday();
