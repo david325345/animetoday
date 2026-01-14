@@ -50,7 +50,6 @@ setInterval(keepAlive, 10 * 60 * 1000);
 async function fetchAiringToday() {
     const now = Date.now();
     
-    // Pokud máme čerstvá data, vrátíme je z cache
     if (animeCache.data.length > 0 && (now - animeCache.timestamp) < animeCache.ttl) {
         return animeCache.data;
     }
@@ -59,22 +58,20 @@ async function fetchAiringToday() {
         const d = new Date();
         const startOfDayUTC = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
         
-        // --- ÚPRAVA ČASU PRO ČR (UTC+1) ---
-        // Odečteme 1 hodinu (3600s), aby "Dnes" začalo v 23:00 předchozího dne UTC.
+        // Úprava pro ČR (UTC+1) - posun o hodinu dozadu
         const todayStart = Math.floor(startOfDayUTC.getTime() / 1000) - 3600;
         const todayEnd = todayStart + 86400; // Okno 24 hodin
-        // ---------------------------------
 
         console.log(`🕒 Dotazuji AniList (Časové okno pro CET): ${todayStart} - ${todayEnd}`);
 
-        // OPRAVA API: airingSchedule -> airingSchedules (množné číslo)
+        // OPRAVA: Odstraněn HTML komentář uvnitř dotazu
         const query = `
             query ($from: Int, $to: Int) {
                 Page(page: 1, perPage: 30) {
                     pageInfo { total }
                     airingSchedules(airingAt_greater: $from, airingAt_lesser: $to, sort: TIME) {
                         airingAt
-                        episode  <-- ANILIST POSKYTUJE PŘESNÉ ČÍSLO EPIZODY
+                        episode
                         media {
                             id
                             title { romaji, english, native }
@@ -108,7 +105,7 @@ async function fetchAiringToday() {
         const schedule = response.data.data.Page.airingSchedules;
         
         if (!schedule || schedule.length === 0) {
-            console.log('📭 Dnes dle AniList (UTC) nevychází nic.');
+            console.log('📭 Dnes dle AniList nevychází nic.');
             return [{
                 id: 'anilist:empty',
                 name: 'Dnes nic nevychází',
@@ -118,12 +115,11 @@ async function fetchAiringToday() {
             }];
         }
 
-        // Mapování dat z AniList do formátu pro Stremio
         const animeList = schedule.map(item => {
             const media = item.media;
             const title = media.title.english || media.title.romaji;
             
-            // AniList vrací přesné číslo epizody v item.episode
+            // AniList vrací přesné číslo epizody
             const safeEpisode = item.episode || 1;
             
             return {
@@ -132,7 +128,7 @@ async function fetchAiringToday() {
                 name: title,
                 romaji: media.title.romaji,
                 native: media.title.native,
-                episode: safeEpisode, // PŘESNÉ ČÍSLO EPIZODY Z ANILIST
+                episode: safeEpisode, // PŘESNÉ ČÍSLO EPIZODY
                 airingAt: item.airingAt,
                 poster: media.coverImage.extraLarge || media.coverImage.large,
                 background: media.bannerImage || media.coverImage.extraLarge,
@@ -153,6 +149,9 @@ async function fetchAiringToday() {
 
     } catch (error) {
         console.error('❌ AniList Error:', error.message);
+        if (error.response) {
+            console.error('Data:', error.response.data);
+        }
         return [{
             id: 'anilist:error',
             name: 'Chyba API',
@@ -179,21 +178,15 @@ app.get('/', (req, res) => {
         .code { color: #a5f3fc; font-family: monospace; background: #000; padding: 10px 15px; border-radius: 6px; font-size: 1.1em; display: block; margin: 15px 0; }
         a.btn { color: #121212; background: #60a5fa; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block; margin-top: 10px; }
         a.btn:hover { background: #3b82f6; }
-        .status { margin-top: 20px; font-size: 0.9em; color: #888; }
     </style>
 </head>
 <body>
     <h1>AniList Metadata Addon</h1>
-    <p>Pure Metadata Provider pro Stremio (S přesnými čísly epizod)</p>
-    
+    <p>Pure Metadata Provider pro Stremio (AniList API)</p>
     <div class="box">
         <div>Manifest URL:</div>
         <div class="code">${baseUrl}/manifest.json</div>
         <a href="stremio://${req.get('host')}/manifest.json" class="btn">🚀 Instalovat do Stremio</a>
-    </div>
-    
-    <div class="status">
-        Protokol: <span style="color:${req.protocol === 'https' ? '#4ade80' : '#f87171'}">${req.protocol.toUpperCase()}</span>
     </div>
 </body>
 </html>`);
@@ -201,7 +194,6 @@ app.get('/', (req, res) => {
 
 app.get('/manifest.json', (req, res) => res.json(ADDON_CONFIG));
 
-// Pomocná funkce pro katalog
 const sendCatalog = async (res) => {
     try {
         const animeList = await fetchAiringToday();
@@ -211,7 +203,6 @@ const sendCatalog = async (res) => {
             name: anime.name,
             poster: anime.poster,
             background: anime.background,
-            // Zobrazení přesného čísla epizody
             description: anime.isPlaceholder 
                 ? 'Žádný obsah' 
                 : `📺 Epizoda ${anime.episode} • ${anime.genres?.join(', ') || ''} • ⭐ ${anime.rating || 0}/100`,
@@ -234,7 +225,6 @@ app.get('/catalog/:type/:id/:extra.json', async (req, res) => {
     return res.json({ metas: [] });
 });
 
-// Detail
 app.get('/meta/:type/:id.json', async (req, res) => {
     try {
         const animeId = req.params.id;
@@ -246,7 +236,6 @@ app.get('/meta/:type/:id.json', async (req, res) => {
             if (anime) {
                 if (anime.isPlaceholder) return res.json({ meta: null });
 
-                // Validace čísla epizody
                 const validEpisode = parseInt(anime.episode);
                 if (isNaN(validEpisode)) return res.status(404).json({ meta: null });
 
@@ -270,7 +259,7 @@ app.get('/meta/:type/:id.json', async (req, res) => {
                             id: videoId,
                             title: `Epizoda ${validEpisode}`,
                             season: 1,
-                            episode: validEpisode, // ZDE JE PŘESNÉ ČÍSLO PRO DALŠÍ ADDONY
+                            episode: validEpisode,
                             released: new Date(anime.airingAt * 1000).toISOString(),
                             overview: `Dnes vychází epizoda ${validEpisode} ze ${anime.totalEpisodes || '?'}.`,
                             thumbnail: anime.poster
