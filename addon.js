@@ -12,11 +12,12 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
+// Konfigurace Addonu
 const ADDON_CONFIG = {
-    id: 'org.anilist.stream.html',
-    version: '6.0.0',
-    name: 'AniList + Nyaa HTML',
-    description: 'Scrapuje přímo HTML Nyaa (přesnější než RSS)',
+    id: 'org.anilist.stream.native',
+    version: '7.0.0',
+    name: 'AniList Dnes + Nyaa Native',
+    description: 'Vyhledává primárně podle Japonských názvů (High Success Rate)',
     logo: 'https://anilist.co/img/icons/android-icon-192x192.png',
     background: 'https://anilist.co/img/logo_al.png',
     resources: ['catalog', 'meta', 'stream'], 
@@ -24,7 +25,7 @@ const ADDON_CONFIG = {
     catalogs: [{
         type: 'series',
         id: 'anilist_today',
-        name: 'Dnes vychází (HTML)',
+        name: 'Dnes vychází (Native)',
         extra: [{ name: 'search', isRequired: false }] 
     }]
 };
@@ -40,7 +41,7 @@ async function keepAlive() {
 }
 setInterval(keepAlive, 10 * 60 * 1000);
 
-// --- AniList API ---
+// --- AniList API (Metadata) ---
 async function fetchAiringToday() {
     const now = Date.now();
     if (animeCache.data.length > 0 && (now - animeCache.timestamp) < animeCache.ttl) {
@@ -50,6 +51,7 @@ async function fetchAiringToday() {
     try {
         const d = new Date();
         const startOfDayUTC = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+        // Čas pro ČR (UTC+1)
         const todayStart = Math.floor(startOfDayUTC.getTime() / 1000) - 3600;
         const todayEnd = todayStart + 86400; 
 
@@ -86,7 +88,7 @@ async function fetchAiringToday() {
             headers: { 
                 'Content-Type': 'application/json', 
                 'Accept': 'application/json',
-                'User-Agent': 'Stremio-HTML-Addon/6.0'
+                'User-Agent': 'Stremio-Native-Addon/7.0'
             }
         });
 
@@ -104,14 +106,16 @@ async function fetchAiringToday() {
 
         const animeList = schedule.map(item => {
             const media = item.media;
-            const title = media.title.romaji || media.title.english;
+            // Native má prioritu pro název addonu (pokud existuje), jinak Romaji
+            const displayName = media.title.native || media.title.romaji || media.title.english;
             const safeEpisode = item.episode || 1;
             
             return {
                 id: `anilist-${media.id}`, 
-                name: title,
+                name: displayName, // Zobrazíme v addonu Japonštinu (protože tak jsou i torrenty)
                 romaji: media.title.romaji,
                 english: media.title.english,
+                native: media.title.native, // NOVĚ: Ukládáme NATIVE pro vyhledávání
                 episode: safeEpisode,
                 airingAt: item.airingAt,
                 poster: media.coverImage.extraLarge || media.coverImage.large,
@@ -142,41 +146,39 @@ async function fetchAiringToday() {
     }
 }
 
-// --- NYAA HTML SCRAPER (Místo RSS) ---
+// --- NYAA SCRAPER ---
 async function searchNyaaHtml(queryString) {
-    // POUŽÍVÁME HTML, NE RSS (odstraněno &page=rss)
     const htmlUrl = `https://nyaa.si/?q=${encodeURIComponent(queryString)}&s=seeders&o=desc`;
     
     try {
-        console.log(`🌐 Scrajuji HTML: ${queryString}`);
+        console.log(`🔍 Hledám: ${queryString}`);
         
         const response = await axios.get(htmlUrl, { 
             timeout: 8000, 
             headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
         });
         
-        // NASTAVÍME XML MODE NA FALSE (vícenásobné HTML)
         const $ = cheerio.load(response.data);
-        
         const streams = [];
         
-        // V HTML tabulce hledáme řádky (tr) které obsahují data
+        // Nyaa používá tabulky
         $('tr.default').each((index, element) => {
-            if (index >= 5) return false; // Prvních 5 výsledků
+            if (index >= 5) return false; // Prvních 5 stačí
             
-            // Najdeme titulek a magnet v rámci tohoto řádku
-            // Selektory pro Nyaa tabulku
             const $el = $(element);
-            const title = $el.find('.torrent-name a').text().trim();
             
-            // Hledáme magnet link (začíná na magnet:)
-            // Může být v ikoně nebo v odkazu
-            const magnetEl = $el.find('a[href^="magnet:"]');
-            const magnetUrl = magnetEl.attr('href');
+            // Název torrentu
+            // Selektor může být .torrent-name nebo a v buňce
+            const titleLink = $el.find('.torrent-name a').first();
+            const title = titleLink.text().trim();
+            
+            // Magnet link
+            const magnetLink = $el.find('a[href^="magnet:"]').first();
+            const magnetUrl = magnetLink.attr('href');
 
             if (magnetUrl && title) {
                 streams.push({
-                    name: '🧲 Nyaa HTML',
+                    name: '🇯🇵 Nyaa Torrent', // Změna ikony, abychom věděli, že jde o JP search
                     title: title,
                     url: magnetUrl
                 });
@@ -185,37 +187,37 @@ async function searchNyaaHtml(queryString) {
 
         return streams;
     } catch (error) {
-        console.log(`⚠️ HTML Search Error:`, error.message);
+        console.log(`⚠️ Search Error: ${error.message}`);
         return [];
     }
 }
 
-// --- LOGIKA HLEDÁNÍ ---
-async function findStreamOnNyaa(animeRomaji, animeEnglish, episode) {
+// --- NATIVE PRIORITY LOGIC ---
+async function findStreamOnNyaa(animeNative, animeRomaji, animeEnglish, episode) {
     
     const episodeStr = episode.toString();
+    let streams = [];
 
-    // 1. Zkusíme Romaji
-    let streams = await searchNyaaHtml(`${animeRomaji} - ${episodeStr}`);
-
-    // 2. Zkusíme Romaji bez pomlčky (např. "One Piece 1100")
-    if (streams.length === 0) {
-        streams = await searchNyaaHtml(`${animeRomaji} ${episodeStr}`);
+    // --- 1. PRIORITY: NATIVE (JAPONSKY) ---
+    // Torrenty jsou téměř vždy v japonštině. Toto je "zlatá hromádka".
+    if (animeNative) {
+        streams = await searchNyaaHtml(`${animeNative} - ${episodeStr}`);
     }
 
-    // 3. Zkusíme English
+    // --- 2. PRIORITY: ENGLISH ---
     if (streams.length === 0 && animeEnglish) {
         streams = await searchNyaaHtml(`${animeEnglish} - ${episodeStr}`);
     }
-    
-    // 4. Jaderný fallback (jen název)
-    if (streams.length === 0) {
-        let raw = await searchNyaaHtml(animeRomaji);
-        if (raw.length === 0 && animeEnglish) raw = await searchNyaaHtml(animeEnglish);
-        
-        // Regex filtr pro číslo epizody
-        const episodeRegex = new RegExp(`[^0-9]${episodeStr}[^0-9]`, 'i');
-        streams = raw.filter(s => episodeRegex.test(s.title));
+
+    // --- 3. PRIORITY: ROMAJI ---
+    if (streams.length === 0 && animeRomaji) {
+        streams = await searchNyaaHtml(`${animeRomaji} - ${episodeStr}`);
+    }
+
+    // --- 4. FALLBACK: JUST NAME (Native) ---
+    if (streams.length === 0 && animeNative) {
+        streams = await searchNyaaHtml(animeNative);
+        // Filtrování výsledků, pokud by bylo třeba, ale Native - Epizoda je obvykle přesné
     }
 
     return streams;
@@ -229,7 +231,7 @@ app.get('/', (req, res) => {
 <html lang="cs">
 <head>
     <meta charset="UTF-8">
-    <title>AniList + Nyaa HTML</title>
+    <title>AniList Native</title>
     <style>
         body { font-family: sans-serif; background: #121212; color: #fff; text-align: center; padding: 40px; }
         h1 { color: #60a5fa; margin-bottom: 10px; }
@@ -237,19 +239,19 @@ app.get('/', (req, res) => {
         .code { color: #a5f3fc; font-family: monospace; background: #000; padding: 10px 15px; border-radius: 6px; font-size: 1.1em; display: block; margin: 15px 0; }
         a.btn { color: #121212; background: #60a5fa; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block; margin-top: 10px; }
         a.btn:hover { background: #3b82f6; }
-        .warning { color: #ff6b6b; margin-top: 10px; }
+        .japan { color: #ff6b6b; font-weight: bold; margin-top: 10px; }
     </style>
 </head>
 <body>
-    <h1>AniList + Nyaa HTML (6.0)</h1>
-    <p>Přímý scraping HTML (vyřešuje problémy s RSS)</p>
+    <h1>AniList Native Search (7.0)</h1>
+    <p>Priorita Japonských názvů (Native) - Řeší většinu problémů</p>
     <div class="box">
         <div>Manifest URL:</div>
         <div class="code">${baseUrl}/manifest.json</div>
         <a href="stremio://${req.get('host')}/manifest.json" class="btn">🚀 Instalovat</a>
     </div>
-    <div class="warning">
-        Poznámka: Tato verze stahuje HTML stránku místo RSS, což je pomalejší, ale spolehlivější.
+    <div class="japan">
+        🇯🇵 Tento addon nyní hledá torrenty pomocí původních Japonských názvů.
     </div>
 </body>
 </html>`);
@@ -263,7 +265,7 @@ const sendCatalog = async (res) => {
         const metas = animeList.map(anime => ({
             id: anime.id,
             type: 'series',
-            name: anime.name,
+            name: anime.name, // Zobrazujeme JP název
             poster: anime.poster,
             background: anime.background,
             description: anime.isPlaceholder 
@@ -308,7 +310,7 @@ app.get('/meta/:type/:id.json', async (req, res) => {
                         name: anime.name,
                         poster: anime.poster,
                         background: anime.background,
-                        description: `${anime.description}\n\n\n📺 Dnes vychází epizoda: **${validEpisode}**\n⏰ Čas: ${airTime}\n⭐ Hodnocení: ${anime.rating}/100\n🎬 Studio: ${anime.studio}`,
+                        description: `${anime.description}\n\n\n📺 Dnes vychází epizoda: **${validEpisode}**\n⏰ Čas: ${airTime}\n⭐ Hodnocení: ${anime.rating}/100\n🎬 Studio: ${anime.studio}\n🇯🵵 Hledáno v Japonském názvu`,
                         genres: anime.genres,
                         releaseInfo: anime.year ? anime.year.toString() : '',
                         videos: [{
@@ -341,8 +343,10 @@ app.get('/stream/:type/:id.json', async (req, res) => {
             const anime = animeList.find(a => a.id === animeId);
 
             if (anime && !anime.isPlaceholder) {
-                // HTML SEARCH STRATEGY
-                const streams = await findStreamOnNyaa(anime.romaji || anime.name, anime.english, anime.episode);
+                console.log(`🇯🇵 Native Search pro: ${anime.name} E${anime.episode}`);
+                
+                // VOLÁME NATIVE LOGIC
+                const streams = await findStreamOnNyaa(anime.native, anime.romaji, anime.english, anime.episode);
 
                 if (streams.length > 0) {
                     return res.json({ streams });
@@ -350,8 +354,8 @@ app.get('/stream/:type/:id.json', async (req, res) => {
                     return res.json({
                         streams: [{
                             name: '❌ Torrent nenalezen',
-                            title: 'HTML Scrape selhal',
-                            url: 'data:text/plain,Not Found'
+                            title: 'Vyzkoušeno Japonsky i Anglicky',
+                            url: 'data:text/plain,Not Available'
                         }]
                     });
                 }
@@ -375,6 +379,6 @@ app.use((err, req, res, next) => {
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 AniList + Nyaa HTML Addon běží na portu ${PORT}`);
+    console.log(`🚀 AniList Native Addon běží na portu ${PORT}`);
     setTimeout(keepAlive, 2 * 60 * 1000);
 });
