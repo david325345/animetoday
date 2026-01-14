@@ -5,52 +5,43 @@ const cors = require('cors');
 
 const app = express();
 
-// --- DŮLEŽITÁ OPRAVA PRO HTTPS ---
 app.set('trust proxy', true);
-// -------------------------------
-
 app.use(cors());
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
-// Konfigurace Addonu
-// ZMĚNA: Přidáno 'stream' do resources
 const ADDON_CONFIG = {
     id: 'org.anilist.stream.today',
-    version: '3.0.0',
-    name: 'AniList Dnes + Nyaa Streamy',
-    description: 'Metadata z AniList + Živé streamy z Nyaa',
+    version: '3.1.0',
+    name: 'AniList Dnes + Nyaa Multi',
+    description: 'Metadata z AniList + Více streamů z Nyaa',
     logo: 'https://anilist.co/img/icons/android-icon-192x192.png',
     background: 'https://anilist.co/img/logo_al.png',
-    resources: ['catalog', 'meta', 'stream'], // PŘIDÁN STREAM
+    resources: ['catalog', 'meta', 'stream'], 
     types: ['series'],
     catalogs: [{
         type: 'series',
         id: 'anilist_today',
-        name: 'Dnes vychází (Streamy)',
+        name: 'Dnes vychází (Multi Stream)',
         extra: [{ name: 'search', isRequired: false }] 
     }]
 };
 
 let animeCache = { data: [], timestamp: 0, ttl: 20 * 60 * 1000 };
 
-// --- Keep-Alive (Render) ---
+// --- Keep-Alive ---
 async function keepAlive() {
     try {
         const baseUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
         await axios.get(`${baseUrl}/health`, { timeout: 5000 });
-        console.log(`🏓 Keep-alive ping úspěšný`);
-    } catch (error) {
-        console.log(`⚠️ Keep-alive ping selhal`);
-    }
+    } catch (error) {}
 }
 setInterval(keepAlive, 10 * 60 * 1000);
 
-// --- AniList GraphQL API (Metadata) ---
+// --- AniList API ---
 async function fetchAiringToday() {
     const now = Date.now();
-    
     if (animeCache.data.length > 0 && (now - animeCache.timestamp) < animeCache.ttl) {
         return animeCache.data;
     }
@@ -60,8 +51,6 @@ async function fetchAiringToday() {
         const startOfDayUTC = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
         const todayStart = Math.floor(startOfDayUTC.getTime() / 1000) - 3600;
         const todayEnd = todayStart + 86400; 
-
-        console.log(`🕒 Dotazuji AniList (Časové okno pro CET): ${todayStart} - ${todayEnd}`);
 
         const query = `
             query ($from: Int, $to: Int) {
@@ -96,14 +85,13 @@ async function fetchAiringToday() {
             headers: { 
                 'Content-Type': 'application/json', 
                 'Accept': 'application/json',
-                'User-Agent': 'Stremio-AniList-Addon/3.0'
+                'User-Agent': 'Stremio-AniList-Addon/3.1'
             }
         });
 
         const schedule = response.data.data.Page.airingSchedules;
         
         if (!schedule || schedule.length === 0) {
-            console.log('📭 Dnes dle AniList nevychází nic.');
             return [{
                 id: 'anilist-empty',
                 name: 'Dnes nic nevychází',
@@ -113,19 +101,16 @@ async function fetchAiringToday() {
             }];
         }
 
-        // Používáme AniList ID (nechceme se bavit s IMDB/MAL, protože hledáme sami)
         const animeList = schedule.map(item => {
             const media = item.media;
             const title = media.title.romaji || media.title.english;
-            const safeEpisode = item.episode || 1;
+            const safeEpisode = item.episode ||1;
             
-            console.log(`📦 ${title} (Ep ${safeEpisode}) připraven`);
-
             return {
                 id: `anilist-${media.id}`, 
                 anilistId: media.id,
                 name: title,
-                romaji: media.title.romaji, // Pro vyhledávání důležité
+                romaji: media.title.romaji,
                 english: media.title.english,
                 episode: safeEpisode,
                 airingAt: item.airingAt,
@@ -143,7 +128,6 @@ async function fetchAiringToday() {
 
         animeCache.data = animeList;
         animeCache.timestamp = now;
-        console.log(`✅ Načteno ${animeList.length} seriálů z AniList`);
         return animeList;
 
     } catch (error) {
@@ -158,45 +142,59 @@ async function fetchAiringToday() {
     }
 }
 
-// --- NYAA STREAM LOGIKA ---
+// --- NYAA STREAM LOGIKA (OPRAVENÁ PRO VÍCE STREAMŮ) ---
 async function findStreamOnNyaa(animeName, episode) {
     try {
-        // Sestavíme dotaz: "Název Anime - Epizoda" nebo "Název Anime Epizoda"
+        // Vyhledávací dotaz
         const searchQuery = encodeURIComponent(`${animeName} - ${episode}`);
-        const rssUrl = `https://nyaa.si/?page=rss&q=${searchQuery}`;
+        
+        // Přidáno s=seeders&o=desc pro seřazení podle seeders (nejlepší nahoře)
+        const rssUrl = `https://nyaa.si/?page=rss&q=${searchQuery}&s=seeders&o=desc`;
 
-        console.log(`🧲 Hledám stream na Nyaa: ${animeName} - ${episode}`);
+        console.log(`🧲 Hledám streamy na Nyaa: ${animeName} - ${episode}`);
 
-        // Stáhneme RSS (timeout 8s)
         const response = await axios.get(rssUrl, { 
             timeout: 8000, 
             headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
         });
 
-        // Parsujeme XML pomocí Cheerio
         const $ = cheerio.load(response.data, { xmlMode: true });
-
-        // vezmeme první výsledek (item)
-        const firstItem = $('item').first();
-        const title = firstItem.find('title').text();
         
-        // Hledáme magnet link v <enclosure> nebo <link>
-        let magnetUrl = firstItem.find('enclosure').attr('url');
-        if (!magnetUrl) {
-            // Fallback na link (torrent soubor), pokud chybí magnet
-            magnetUrl = firstItem.find('link').text();
-        }
+        const streams = [];
+        
+        // Iterujeme přes VŠECHNY nalezené položky (items)
+        $('item').each((index, element) => {
+            // Omezíme na max 5 výsledků, aby Stremio nebylo pomalé
+            if (index >= 5) return false;
 
-        if (magnetUrl) {
-            console.log(`✅ Nalezen magnet: ${title}`);
-            return [{
-                name: '🧲 Nyaa Stream',
-                title: title,
-                url: magnetUrl
-            }];
-        }
+            const $el = $(element);
+            const title = $el.find('title').text();
+            
+            // Získáme magnet (z enclosure nebo link)
+            let magnetUrl = $el.find('enclosure').attr('url');
+            if (!magnetUrl) {
+                const linkUrl = $el.find('link').text();
+                // Pokud je to .torrent soubor, můžeme ho použít jako fallback, ale magnet je lepší
+                if (linkUrl && linkUrl.includes('magnet')) magnetUrl = linkUrl;
+            }
 
-        return []; // Nenašli jsme
+            if (magnetUrl) {
+                // Detekce kvality z názvu pro lepší název streamu
+                let quality = 'Torrent';
+                if (title.includes('1080p')) quality = '1080p';
+                else if (title.includes('720p')) quality = '720p';
+                else if (title.includes('480p')) quality = '480p';
+
+                streams.push({
+                    name: `🧲 Nyaa ${quality}`, // Např. Nyaa 1080p
+                    title: title, // Celý název z Nyaa (včetně fansub skupiny)
+                    url: magnetUrl
+                });
+            }
+        });
+
+        console.log(`✅ Nalezeno ${streams.length} torrentů`);
+        return streams;
 
     } catch (error) {
         console.log(`⚠️ Nyaa Search Error (${animeName}):`, error.message);
@@ -212,7 +210,7 @@ app.get('/', (req, res) => {
 <html lang="cs">
 <head>
     <meta charset="UTF-8">
-    <title>AniList + Nyaa Addon</title>
+    <title>AniList + Nyaa Multi</title>
     <style>
         body { font-family: sans-serif; background: #121212; color: #fff; text-align: center; padding: 40px; }
         h1 { color: #60a5fa; margin-bottom: 10px; }
@@ -223,12 +221,12 @@ app.get('/', (req, res) => {
     </style>
 </head>
 <body>
-    <h1>AniList + Nyaa Streamy</h1>
-    <p>Metadata z AniList, Streamy z Nyaa RSS</p>
+    <h1>AniList + Nyaa Multi</h1>
+    <p>Ukazuje více variant torrentů</p>
     <div class="box">
         <div>Manifest URL:</div>
         <div class="code">${baseUrl}/manifest.json</div>
-        <a href="stremio://${req.get('host')}/manifest.json" class="btn">🚀 Instalovat do Stremio</a>
+        <a href="stremio://${req.get('host')}/manifest.json" class="btn">🚀 Instalovat</a>
     </div>
 </body>
 </html>`);
@@ -240,7 +238,7 @@ const sendCatalog = async (res) => {
     try {
         const animeList = await fetchAiringToday();
         const metas = animeList.map(anime => ({
-            id: anime.id, // anilist-12345
+            id: anime.id,
             type: 'series',
             name: anime.name,
             poster: anime.poster,
@@ -252,7 +250,6 @@ const sendCatalog = async (res) => {
         }));
         return res.json({ metas });
     } catch (error) {
-        console.error('Route Error:', error);
         if (!res.headersSent) return res.status(500).json({ metas: [] });
     }
 };
@@ -270,14 +267,11 @@ app.get('/catalog/:type/:id/:extra.json', async (req, res) => {
 app.get('/meta/:type/:id.json', async (req, res) => {
     try {
         const animeId = req.params.id;
-        
         if (animeId.startsWith('anilist-')) {
             const animeList = await fetchAiringToday();
             const anime = animeList.find(a => a.id === animeId);
 
-            if (anime) {
-                if (anime.isPlaceholder) return res.json({ meta: null });
-
+            if (anime && !anime.isPlaceholder) {
                 const validEpisode = parseInt(anime.episode);
                 if (isNaN(validEpisode)) return res.status(404).json({ meta: null });
 
@@ -309,7 +303,6 @@ app.get('/meta/:type/:id.json', async (req, res) => {
         }
         return res.status(404).json({ meta: null });
     } catch (error) {
-        console.error('Meta Route Error:', error);
         if (!res.headersSent) return res.status(500).json({ meta: null });
     }
 });
@@ -317,29 +310,25 @@ app.get('/meta/:type/:id.json', async (req, res) => {
 app.get('/stream/:type/:id.json', async (req, res) => {
     try {
         const videoId = req.params.id;
-        // ID formát: anilist-12345:1:24
         const parts = videoId.split(':');
-        const animeId = parts[0]; // anilist-12345
+        const animeId = parts[0];
 
         if (animeId.startsWith('anilist-')) {
             const animeList = await fetchAiringToday();
             const anime = animeList.find(a => a.id === animeId);
 
             if (anime && !anime.isPlaceholder) {
-                console.log(`🔍 Žádost o stream pro: ${anime.name} E${anime.episode}`);
-                
-                // ŽIVÉ VYHLEDÁNÍ NA NYAA
+                // Voláme funkci, která nyní vrací VÍCE streamů
                 const streams = await findStreamOnNyaa(anime.romaji || anime.name, anime.episode);
 
                 if (streams.length > 0) {
                     return res.json({ streams });
                 } else {
-                    // Fallback: Pokud Nyaa nic nenašlo, vrátíme odkaz na web pro ruční vyhledání
                     const fallbackUrl = `https://nyaa.si/?q=${encodeURIComponent(anime.romaji + ' ' + anime.episode)}`;
                     return res.json({
                         streams: [{
                             name: '🔍 Hledat na Nyaa Manuálně',
-                            title: 'Torrent automaticky nenalezen, zkuste vyhledat ručně',
+                            title: 'Torrent automaticky nenalezen',
                             url: fallbackUrl,
                             behaviorHints: { notWebReady: true }
                         }]
@@ -349,7 +338,6 @@ app.get('/stream/:type/:id.json', async (req, res) => {
         }
         return res.json({ streams: [] });
     } catch (error) {
-        console.error('Stream Route Error:', error);
         if (!res.headersSent) return res.status(500).json({ streams: [] });
     }
 });
@@ -359,13 +347,12 @@ app.get('/health', (req, res) => {
 });
 
 app.use((err, req, res, next) => {
-    console.error('Global Error:', err);
     if (!res.headersSent) {
         res.status(500).json({ error: 'Internal Server Error' });
     }
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 AniList + Nyaa Addon běží na portu ${PORT}`);
+    console.log(`🚀 AniList + Nyaa Multi Addon běží na portu ${PORT}`);
     setTimeout(keepAlive, 2 * 60 * 1000);
 });
