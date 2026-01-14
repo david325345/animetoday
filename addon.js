@@ -13,12 +13,16 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
-// Konfigurace Addonu
+// KONFIGURACE:
+// 'ANILIST' - Používá AniList ID (nejlepší pro čerstvé epizody, protože scrolleři to monitorují).
+// 'MAL'      - Používá MyAnimeList ID (funguje dobře pro starší anime, nové mohou mít zpoždění indexace).
+const ID_PRIORITY = 'ANILIST'; 
+
 const ADDON_CONFIG = {
     id: 'org.anilist.meta.today',
-    version: '1.2.0',
-    name: 'AniList Dnes (MAL Only)',
-    description: 'Katalog anime vycházejících dnes - Pouze MAL ID',
+    version: '1.3.0',
+    name: 'AniList Dnes (Smart ID)',
+    description: 'Katalog anime vycházejících dnes - Inteligentní výběr ID',
     logo: 'https://anilist.co/img/icons/android-icon-192x192.png',
     background: 'https://anilist.co/img/logo_al.png',
     resources: ['catalog', 'meta'], 
@@ -31,7 +35,6 @@ const ADDON_CONFIG = {
     }]
 };
 
-// Cache pro data (20 minut)
 let animeCache = { data: [], timestamp: 0, ttl: 20 * 60 * 1000 };
 
 // --- Keep-Alive (Render) ---
@@ -64,7 +67,6 @@ async function fetchAiringToday() {
 
         console.log(`🕒 Dotazuji AniList (Časové okno pro CET): ${todayStart} - ${todayEnd}`);
 
-        // Dotaz - získáváme idMal
         const query = `
             query ($from: Int, $to: Int) {
                 Page(page: 1, perPage: 30) {
@@ -99,7 +101,7 @@ async function fetchAiringToday() {
             headers: { 
                 'Content-Type': 'application/json', 
                 'Accept': 'application/json',
-                'User-Agent': 'Stremio-AniList-Addon/1.2'
+                'User-Agent': 'Stremio-AniList-Addon/1.3'
             }
         });
 
@@ -108,7 +110,7 @@ async function fetchAiringToday() {
         if (!schedule || schedule.length === 0) {
             console.log('📭 Dnes dle AniList nevychází nic.');
             return [{
-                id: 'mal-empty',
+                id: 'anilist-empty',
                 name: 'Dnes nic nevychází',
                 poster: 'https://via.placeholder.com/300x400/000000/FFFFFF?text=Žádné+anime',
                 isPlaceholder: true,
@@ -116,25 +118,37 @@ async function fetchAiringToday() {
             }];
         }
 
-        // Mapování dat - nyní synchronní bez volání dalšího API (TVDB)
         const animeList = schedule.map(item => {
             const media = item.media;
             const malId = media.idMal;
             const title = media.title.romaji || media.title.english;
             
-            // --- ROZHODOVACÍ LOGIKA ID ---
-            // Používáme MAL ID jako primární.
-            // Pokud AniList nemá MAL ID (vzácné), použijeme AniList ID (Torrentio to taky zvládne).
-            const finalId = malId ? `mal-${malId}` : `anilist-${media.id}`;
+            let finalId = '';
+            
+            if (ID_PRIORITY === 'MAL') {
+                // Logika z předchozího kódu (MAL priorita)
+                finalId = malId ? `mal-${malId}` : `anilist-${media.id}`;
+            } else {
+                // NOVÁ LOGIKA: AniList priorita (lepší pro čerstvé anime)
+                // Používáme AniList ID jako primární. Scrollery ho znají nejlépe.
+                finalId = `anilist-${media.id}`;
+                // Pokud bys chtěl v budoucnu zálohu na MAL (např. pro jiné addony):
+                // finalId = malId ? `mal-${malId}` : `anilist-${media.id}`;
+            }
             
             const safeEpisode = item.episode || 1;
             
+            // Logování pro debugging
+            console.log(`🎯 ${title} (Ep ${safeEpisode}): Používám ID ${finalId}`);
+
             return {
                 id: finalId, 
                 anilistId: media.id,
                 malId: malId,
                 name: title,
                 romaji: media.title.romaji,
+                english: media.title.english, // Přidáno pro případný fallback v popisu
+                native: media.title.native,
                 episode: safeEpisode,
                 airingAt: item.airingAt,
                 poster: media.coverImage.extraLarge || media.coverImage.large,
@@ -151,14 +165,14 @@ async function fetchAiringToday() {
 
         animeCache.data = animeList;
         animeCache.timestamp = now;
-        console.log(`✅ Načteno ${animeList.length} seriálů (Pouze MAL ID)`);
+        console.log(`✅ Načteno ${animeList.length} seriálů (ID priorita: ${ID_PRIORITY})`);
         return animeList;
 
     } catch (error) {
         console.error('❌ AniList Error:', error.message);
         if (error.response) console.error('Detail:', error.response.data);
         return [{
-            id: 'mal-error',
+            id: 'anilist-error',
             name: 'Chyba API',
             poster: 'https://via.placeholder.com/300x400/FF0000/FFFFFF?text=Chyba',
             isPlaceholder: true,
@@ -187,16 +201,16 @@ app.get('/', (req, res) => {
     </style>
 </head>
 <body>
-    <h1>AniList Dnes (MAL Only)</h1>
-    <p>Metadata pouze s MAL ID pro maximální kompatibilitu</p>
+    <h1>AniList Dnes (Smart ID)</h1>
+    <p>Nativní AniList ID pro lepší kompatibilitu s čerstvými epizodami</p>
     <div class="box">
         <div>Manifest URL:</div>
         <div class="code">${baseUrl}/manifest.json</div>
         <a href="stremio://${req.get('host')}/manifest.json" class="btn">🚀 Instalovat do Stremio</a>
     </div>
     <div class="info">
-        📌 Tento addon poskytuje pouze metadata.<br>
-        🔑 Streamy budou fungovat přes Torrentio/Aliyun díky MAL ID.
+        ID Priority: <strong>${ID_PRIORITY}</strong><br>
+        Pokud se stále vyskytují problémy, podívej se do logů konzole, jaké ID se posílá.
     </div>
 </body>
 </html>`);
@@ -208,7 +222,7 @@ const sendCatalog = async (res) => {
     try {
         const animeList = await fetchAiringToday();
         const metas = animeList.map(anime => ({
-            id: anime.id, // zde je mal-xxxx nebo anilist-xxxx
+            id: anime.id,
             type: 'series',
             name: anime.name,
             poster: anime.poster,
@@ -239,8 +253,7 @@ app.get('/meta/:type/:id.json', async (req, res) => {
     try {
         const animeId = req.params.id;
         
-        // Akceptujeme mal- i anilist- prefixy
-        if (animeId.startsWith('mal-') || animeId.startsWith('anilist-')) {
+        if (animeId.startsWith('anilist-') || animeId.startsWith('mal-')) {
             const animeList = await fetchAiringToday();
             const anime = animeList.find(a => a.id === animeId);
 
@@ -302,6 +315,6 @@ app.use((err, req, res, next) => {
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 AniList Metadata Addon (MAL Only) běží na portu ${PORT}`);
+    console.log(`🚀 AniList Metadata Addon (Smart ID) běží na portu ${PORT}`);
     setTimeout(keepAlive, 2 * 60 * 1000);
 });
