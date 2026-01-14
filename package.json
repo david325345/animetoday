@@ -1,6 +1,6 @@
 {
   "name": "stremio-anilist-nyaa-addon",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -13,6 +13,6 @@
     "xml2js": "^0.6.2"
   },
   "engines": {
-    "node": "14.x"
+    "node": "18.x" 
   }
 }
