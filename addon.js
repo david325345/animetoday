@@ -16,9 +16,9 @@ const PORT = process.env.PORT || 3000;
 // Konfigurace Addonu
 const ADDON_CONFIG = {
     id: 'org.anilist.meta.today',
-    version: '1.0.0',
-    name: 'AniList Dnes (Metadata)',
-    description: 'Katalog anime vycházejících dnes - pouze metadata',
+    version: '1.1.0',
+    name: 'AniList Dnes (MAL/TVDB IDs)',
+    description: 'Katalog anime vycházejících dnes - ID mapováno pro Stremio',
     logo: 'https://anilist.co/img/icons/android-icon-192x192.png',
     background: 'https://anilist.co/img/logo_al.png',
     resources: ['catalog', 'meta'], 
@@ -46,6 +46,24 @@ async function keepAlive() {
 }
 setInterval(keepAlive, 10 * 60 * 1000);
 
+// Pomocná funkce pro získání TVDB ID z MAL ID přes Malsync API
+async function getTvdbId(malId) {
+    try {
+        // Malé zpoždění, abychom nezahltili API (rate limit)
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+        const response = await axios.get(`https://api.malsync.moe/mal/anime/${malId}`, { timeout: 5000 });
+        // Ověříme, zda existuje TVDB ID
+        if (response.data && response.data.Sites && response.data.Sites.TVDB) {
+            return response.data.Sites.TVDB.id;
+        }
+        return null;
+    } catch (error) {
+        // Pokud se nepodaří získat TVDB, ignorujeme chybu a vrátíme null
+        return null;
+    }
+}
+
 // --- AniList GraphQL API ---
 async function fetchAiringToday() {
     const now = Date.now();
@@ -64,6 +82,7 @@ async function fetchAiringToday() {
 
         console.log(`🕒 Dotazuji AniList (Časové okno pro CET): ${todayStart} - ${todayEnd}`);
 
+        // POZOR: Přidáno pole 'idMal' do dotazu
         const query = `
             query ($from: Int, $to: Int) {
                 Page(page: 1, perPage: 30) {
@@ -73,6 +92,7 @@ async function fetchAiringToday() {
                         episode
                         media {
                             id
+                            idMal  <-- ZÍSKÁVÁME MAL ID PŘÍMO Z ANILIST
                             title { romaji, english, native }
                             description
                             coverImage { extraLarge, large, color }
@@ -84,7 +104,6 @@ async function fetchAiringToday() {
                             episodes
                             seasonYear
                             studios { nodes { name } }
-                            synonyms
                         }
                     }
                 }
@@ -98,7 +117,7 @@ async function fetchAiringToday() {
             headers: { 
                 'Content-Type': 'application/json', 
                 'Accept': 'application/json',
-                'User-Agent': 'Stremio-AniList-Addon/1.0'
+                'User-Agent': 'Stremio-AniList-Addon/1.1'
             }
         });
 
@@ -107,7 +126,7 @@ async function fetchAiringToday() {
         if (!schedule || schedule.length === 0) {
             console.log('📭 Dnes dle AniList nevychází nic.');
             return [{
-                id: 'anilist-empty', // Použití pomlčky v ID
+                id: 'mal-empty', // Fallback ID
                 name: 'Dnes nic nevychází',
                 poster: 'https://via.placeholder.com/300x400/000000/FFFFFF?text=Žádné+anime',
                 isPlaceholder: true,
@@ -115,52 +134,59 @@ async function fetchAiringToday() {
             }];
         }
 
-        const animeList = schedule.map(item => {
-            const media = item.media;
-            
-            // --- KLÍČOVÁ ZMĚNA PRO HLEDÁNÍ STREAMŮ ---
-            // Používáme jako primární název ROMAJI (Japonský název).
-            // Torrenty mají vždy japonský název. Anglický název (English) často selže.
-            const primaryName = media.title.romaji || media.title.english;
-            
-            // --- ZMĚNA ID ---
-            // Používáme pomlčku (anilist-123) místo dvojtečky (anilist:123).
-            // To pomáhá parserům v ostatních addonech, aby nespletli číslo epizody.
-            const id = `anilist-${media.id}`;
+        // Zpracování dat - mapování ID
+        // Použijeme Promise.allSettled, aby jeden neúspěšný mapování nezabil celý seznam
+        const processedData = await Promise.allSettled(
+            schedule.map(async (item) => {
+                const media = item.media;
+                const malId = media.idMal; // MAL ID z AniList
+                const title = media.title.romaji || media.title.english;
+                
+                // Zkusíme získat TVDB ID
+                const tvdbId = await getTvdbId(malId);
+                
+                // ROZHODOVACÍ LOGIKA PRO ID:
+                // 1. Pokud existuje TVDB ID -> Použijeme tvdb-12345 (Podpora Cinemeta/Všeobecné)
+                // 2. Pokud neexistuje TVDB ID -> Použijeme mal-12345 (Podpora Torrentio/Aliyun - pro anime spolehlivější)
+                const finalId = tvdbId ? `tvdb-${tvdbId}` : `mal-${malId}`;
+                
+                const safeEpisode = item.episode || 1;
+                
+                return {
+                    id: finalId, 
+                    // Uložíme si i originální AniList ID pro případnou potřebu
+                    anilistId: media.id,
+                    name: title, // ROMAJI název pro nejlepší vyhledávání
+                    romaji: media.title.romaji,
+                    episode: safeEpisode,
+                    airingAt: item.airingAt,
+                    poster: media.coverImage.extraLarge || media.coverImage.large,
+                    background: media.bannerImage || media.coverImage.extraLarge,
+                    description: (media.description || '').replace(/<[^>]*>?/gm, '').substring(0, 800), 
+                    genres: media.genres,
+                    rating: media.averageScore,
+                    year: media.seasonYear,
+                    studio: media.studios.nodes.map(n => n.name).join(', '),
+                    totalEpisodes: media.episodes,
+                    isPlaceholder: false
+                };
+            })
+        );
 
-            const safeEpisode = item.episode || 1;
-            
-            return {
-                id: id, 
-                anilistId: media.id,
-                name: primaryName, // ROMAJI NA PRVNÍM MÍSTĚ
-                // Uložíme si i anglický název pro případnou shodu, ale pro vyhledávání je Romaji klíč
-                altName: media.title.english || '',
-                romaji: media.title.romaji,
-                native: media.title.native,
-                episode: safeEpisode,
-                airingAt: item.airingAt,
-                poster: media.coverImage.extraLarge || media.coverImage.large,
-                background: media.bannerImage || media.coverImage.extraLarge,
-                description: (media.description || '').replace(/<[^>]*>?/gm, '').substring(0, 1000), 
-                genres: media.genres,
-                rating: media.averageScore,
-                year: media.seasonYear,
-                studio: media.studios.nodes.map(n => n.name).join(', '),
-                totalEpisodes: media.episodes,
-                isPlaceholder: false
-            };
-        });
+        // Filtrujeme jen úspěšné výsledky (z Promise.allSettled)
+        const animeList = processedData
+            .filter(p => p.status === 'fulfilled')
+            .map(p => p.value);
 
         animeCache.data = animeList;
         animeCache.timestamp = now;
-        console.log(`✅ Načteno ${animeList.length} seriálů z AniList`);
+        console.log(`✅ Načteno ${animeList.length} seriálů (ID mapováno na TVDB/MAL)`);
         return animeList;
 
     } catch (error) {
         console.error('❌ AniList Error:', error.message);
         return [{
-            id: 'anilist-error',
+            id: 'mal-error',
             name: 'Chyba API',
             poster: 'https://via.placeholder.com/300x400/FF0000/FFFFFF?text=Chyba',
             isPlaceholder: true,
@@ -185,18 +211,23 @@ app.get('/', (req, res) => {
         .code { color: #a5f3fc; font-family: monospace; background: #000; padding: 10px 15px; border-radius: 6px; font-size: 1.1em; display: block; margin: 15px 0; }
         a.btn { color: #121212; background: #60a5fa; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block; margin-top: 10px; }
         a.btn:hover { background: #3b82f6; }
-        .note { font-size: 0.8em; color: #888; margin-top: 15px; }
+        .info { font-size: 0.9em; color: #888; margin-top: 20px; line-height: 1.5; }
     </style>
 </head>
 <body>
-    <h1>AniList Metadata Addon</h1>
-    <p>Pure Metadata Provider (Priorita Romaji názvů pro lepší hledání)</p>
+    <h1>AniList Dnes (MAL/TVDB IDs)</h1>
+    <p>Metadata s automatickým mapováním ID pro Stremio</p>
+    
     <div class="box">
         <div>Manifest URL:</div>
         <div class="code">${baseUrl}/manifest.json</div>
         <a href="stremio://${req.get('host')}/manifest.json" class="btn">🚀 Instalovat do Stremio</a>
     </div>
-    <div class="note">Poznámka: Pro streamování musíte mít nainstalovaný další addon (např. Torrentio).</div>
+    
+    <div class="info">
+        🔄 Addon automaticky mapuje AniList ID na TVDB nebo MAL ID.<br>
+        Díky tomu by měly fungovat streamovací addony jako Torrentio, Aliyun nebo Cinemeta.
+    </div>
 </body>
 </html>`);
 });
@@ -207,9 +238,9 @@ const sendCatalog = async (res) => {
     try {
         const animeList = await fetchAiringToday();
         const metas = animeList.map(anime => ({
-            id: anime.id,
+            id: anime.id, // Zde je již mapované ID (tvdb-xxx nebo mal-xxx)
             type: 'series',
-            name: anime.name, // Zde vracíme Romaji název
+            name: anime.name,
             poster: anime.poster,
             background: anime.background,
             description: anime.isPlaceholder 
@@ -237,9 +268,8 @@ app.get('/catalog/:type/:id/:extra.json', async (req, res) => {
 app.get('/meta/:type/:id.json', async (req, res) => {
     try {
         const animeId = req.params.id;
-        
-        // Podpora pro staré ID s dvojtečkou (kvůli kompatibilitě)
-        if (animeId.startsWith('anilist:') || animeId.startsWith('anilist-')) {
+        // Akceptujeme jak tvdb, tak mal prefixy
+        if (animeId.startsWith('tvdb-') || animeId.startsWith('mal-') || animeId.startsWith('anilist-')) {
             const animeList = await fetchAiringToday();
             const anime = animeList.find(a => a.id === animeId);
 
@@ -257,12 +287,12 @@ app.get('/meta/:type/:id.json', async (req, res) => {
 
                 return res.json({
                     meta: {
-                        id: anime.id,
+                        id: anime.id, // Mapované ID
                         type: 'series',
-                        name: anime.name, // Romaji
+                        name: anime.name,
                         poster: anime.poster,
                         background: anime.background,
-                        description: `${anime.description}\n\n\n📺 Dnes vychází epizoda: **${validEpisode}**\n⏰ Čas: ${airTime}\n⭐ Hodnocení: ${anime.rating}/100\n🎬 Studio: ${anime.studio}\n📌 Název pro hledání: ${anime.romaji}`,
+                        description: `${anime.description}\n\n\n📺 Dnes vychází epizoda: **${validEpisode}**\n⏰ Čas: ${airTime}\n⭐ Hodnocení: ${anime.rating}/100\n🎬 Studio: ${anime.studio}`,
                         genres: anime.genres,
                         releaseInfo: anime.year ? anime.year.toString() : '',
                         videos: [{
