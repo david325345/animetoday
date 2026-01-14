@@ -16,13 +16,13 @@ const ADDON_CONFIG = {
     description: 'Katalog anime vycházejících dnes - pouze metadata',
     logo: 'https://anilist.co/img/icons/android-icon-192x192.png',
     background: 'https://anilist.co/img/logo_al.png',
-    resources: ['catalog', 'meta'], // POZNÁMKA: Odstraněno 'stream'
+    resources: ['catalog', 'meta'], 
     types: ['series'],
     catalogs: [{
         type: 'series',
         id: 'anilist_today',
         name: 'Dnes vychází (AniList)',
-        extra: [{ name: 'search', isRequired: false }] // Volitelné pro vyhledávání
+        extra: [{ name: 'search', isRequired: false }] 
     }]
 };
 
@@ -49,11 +49,9 @@ async function fetchAiringToday() {
     }
 
     try {
-        // Časové okno pro "Dnes" (UTC)
         const todayStart = Math.floor(new Date().setHours(0, 0, 0, 0) / 1000);
         const todayEnd = Math.floor(new Date().setHours(23, 59, 59, 999) / 1000);
 
-        // GraphQL Dotaz - žádáme o všechny potřebné metadata
         const query = `
             query ($from: Int, $to: Int) {
                 Page(page: 1, perPage: 50) {
@@ -98,13 +96,12 @@ async function fetchAiringToday() {
             }];
         }
 
-        // Mapování dat do formátu pro Stremio
         const animeList = schedule.map(item => {
             const media = item.media;
             const title = media.title.english || media.title.romaji;
             
             return {
-                id: `anilist:${media.id}`, // Toto ID použiješ v dalším addonu pro streamování
+                id: `anilist:${media.id}`, 
                 anilistId: media.id,
                 name: title,
                 romaji: media.title.romaji,
@@ -113,7 +110,7 @@ async function fetchAiringToday() {
                 airingAt: item.airingAt,
                 poster: media.coverImage.extraLarge || media.coverImage.large,
                 background: media.bannerImage || media.coverImage.extraLarge,
-                description: (media.description || '').replace(/<[^>]*>?/gm, '').substring(0, 1000), // Odstraníme HTML a zkrátíme
+                description: (media.description || '').replace(/<[^>]*>?/gm, '').substring(0, 1000), 
                 genres: media.genres,
                 rating: media.averageScore,
                 year: media.seasonYear,
@@ -142,7 +139,6 @@ async function fetchAiringToday() {
 
 // --- ROUTES ---
 
-// Úvodní stránka
 app.get('/', (req, res) => {
     const baseUrl = req.protocol + '://' + req.get('host');
     res.send(`<!DOCTYPE html>
@@ -161,13 +157,9 @@ app.get('/', (req, res) => {
 <body>
     <h1>AniList Metadata Addon</h1>
     <p>Tento addon poskytuje pouze metadata (katalog, popisky, obrázky).</p>
-    <p><strong>Streamování</strong> musí být vyřešeno v dalším addonu.</p>
-    
     <div class="box">
         <p>Instalační URL:</p>
         <div class="code">${baseUrl}/manifest.json</div>
-        <br><br>
-        <a href="${baseUrl}/manifest.json" style="color:#121212; background:#60a5fa; padding:10px 20px; text-decoration:none; border-radius:5px;">Otevřít v Stremio</a>
     </div>
 </body>
 </html>`);
@@ -175,19 +167,17 @@ app.get('/', (req, res) => {
 
 app.get('/manifest.json', (req, res) => res.json(ADDON_CONFIG));
 
-// Katalog (Seznam anime v "Dnes vychází")
+// Katalog - Hlavní cesta
 app.get('/catalog/:type/:id.json', async (req, res) => {
     if (req.params.id === 'anilist_today') {
         const animeList = await fetchAiringToday();
         
-        // Formát pro Stremio katalog
         const metas = animeList.map(anime => ({
             id: anime.id,
             type: 'series',
             name: anime.name,
             poster: anime.poster,
             background: anime.background,
-            // Krátký popis do katalogu
             description: anime.isPlaceholder ? 'Žádný obsah' : `${anime.genres?.join(', ')} • Rating: ${anime.rating}`,
             genres: anime.genres
         }));
@@ -198,11 +188,32 @@ app.get('/catalog/:type/:id.json', async (req, res) => {
     }
 });
 
-// Detail (Plná metadata po kliknutí na anime)
+// Katalog - Cesta s extra parametry (OPRAVA PRO "FAILED TO FETCH")
+// Stremio někdy posílá požadavek ve formátu /catalog/series/anilist_today/search.json nebo podobně.
+// Pokud tato cesta neexistuje, vrátí 404.
+app.get('/catalog/:type/:id/:extra.json', async (req, res) => {
+    if (req.params.id === 'anilist_today') {
+        const animeList = await fetchAiringToday();
+        
+        const metas = animeList.map(anime => ({
+            id: anime.id,
+            type: 'series',
+            name: anime.name,
+            poster: anime.poster,
+            background: anime.background,
+            description: anime.isPlaceholder ? 'Žádný obsah' : `${anime.genres?.join(', ')} • Rating: ${anime.rating}`,
+            genres: anime.genres
+        }));
+        
+        res.json({ metas });
+    } else {
+        res.json({ metas: [] });
+    }
+});
+
 app.get('/meta/:type/:id.json', async (req, res) => {
     const animeId = req.params.id;
     
-    // Pokud je ID z našeho formátu
     if (animeId.startsWith('anilist:')) {
         const animeList = await fetchAiringToday();
         const anime = animeList.find(a => a.id === animeId);
@@ -212,10 +223,8 @@ app.get('/meta/:type/:id.json', async (req, res) => {
                 return res.json({ meta: null });
             }
 
-            // Vytvoření objektu video pro dnešní epizodu
             const videoId = `${anime.id}:1:${anime.episode}`;
             
-            // Formatování času vysílání
             const airTime = new Date(anime.airingAt * 1000).toLocaleTimeString('cs-CZ', { 
                 hour: '2-digit', minute: '2-digit' 
             });
@@ -231,7 +240,7 @@ app.get('/meta/:type/:id.json', async (req, res) => {
                     genres: anime.genres,
                     releaseInfo: anime.year ? anime.year.toString() : '',
                     videos: [{
-                        id: videoId, // TOTO JE ID, KTERÉ POUŽIJE TVŮJ DALŠÍ ADDON PRO STREAMOVÁNÍ
+                        id: videoId,
                         title: `Epizoda ${anime.episode}`,
                         season: 1,
                         episode: parseInt(anime.episode),
@@ -246,11 +255,7 @@ app.get('/meta/:type/:id.json', async (req, res) => {
     res.status(404).json({ meta: null });
 });
 
-// Stream endpoint - Vrací prázdné pole, protože tento addon neposkytuje streamy
-// Stremio to vyžaduje, aby nezahltil logy chybami
 app.get('/stream/:type/:id.json', (req, res) => {
-    // Pokud chceš, můžeš sem přidat logiku, která vrátí "error" zprávu,
-    // ale prázdné pole je nejčistší řešení pro "Metadata Only" addon.
     res.json({ streams: [] });
 });
 
