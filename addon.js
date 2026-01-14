@@ -58,13 +58,12 @@ async function fetchAiringToday() {
         const d = new Date();
         const startOfDayUTC = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
         
-        // Úprava pro ČR (UTC+1) - posun o hodinu dozadu
+        // Úprava pro ČR (UTC+1)
         const todayStart = Math.floor(startOfDayUTC.getTime() / 1000) - 3600;
-        const todayEnd = todayStart + 86400; // Okno 24 hodin
+        const todayEnd = todayStart + 86400; 
 
         console.log(`🕒 Dotazuji AniList (Časové okno pro CET): ${todayStart} - ${todayEnd}`);
 
-        // OPRAVA: Odstraněn HTML komentář uvnitř dotazu
         const query = `
             query ($from: Int, $to: Int) {
                 Page(page: 1, perPage: 30) {
@@ -85,6 +84,7 @@ async function fetchAiringToday() {
                             episodes
                             seasonYear
                             studios { nodes { name } }
+                            synonyms
                         }
                     }
                 }
@@ -107,7 +107,7 @@ async function fetchAiringToday() {
         if (!schedule || schedule.length === 0) {
             console.log('📭 Dnes dle AniList nevychází nic.');
             return [{
-                id: 'anilist:empty',
+                id: 'anilist-empty', // Použití pomlčky v ID
                 name: 'Dnes nic nevychází',
                 poster: 'https://via.placeholder.com/300x400/000000/FFFFFF?text=Žádné+anime',
                 isPlaceholder: true,
@@ -117,18 +117,28 @@ async function fetchAiringToday() {
 
         const animeList = schedule.map(item => {
             const media = item.media;
-            const title = media.title.english || media.title.romaji;
             
-            // AniList vrací přesné číslo epizody
+            // --- KLÍČOVÁ ZMĚNA PRO HLEDÁNÍ STREAMŮ ---
+            // Používáme jako primární název ROMAJI (Japonský název).
+            // Torrenty mají vždy japonský název. Anglický název (English) často selže.
+            const primaryName = media.title.romaji || media.title.english;
+            
+            // --- ZMĚNA ID ---
+            // Používáme pomlčku (anilist-123) místo dvojtečky (anilist:123).
+            // To pomáhá parserům v ostatních addonech, aby nespletli číslo epizody.
+            const id = `anilist-${media.id}`;
+
             const safeEpisode = item.episode || 1;
             
             return {
-                id: `anilist:${media.id}`, 
+                id: id, 
                 anilistId: media.id,
-                name: title,
+                name: primaryName, // ROMAJI NA PRVNÍM MÍSTĚ
+                // Uložíme si i anglický název pro případnou shodu, ale pro vyhledávání je Romaji klíč
+                altName: media.title.english || '',
                 romaji: media.title.romaji,
                 native: media.title.native,
-                episode: safeEpisode, // PŘESNÉ ČÍSLO EPIZODY
+                episode: safeEpisode,
                 airingAt: item.airingAt,
                 poster: media.coverImage.extraLarge || media.coverImage.large,
                 background: media.bannerImage || media.coverImage.extraLarge,
@@ -149,11 +159,8 @@ async function fetchAiringToday() {
 
     } catch (error) {
         console.error('❌ AniList Error:', error.message);
-        if (error.response) {
-            console.error('Data:', error.response.data);
-        }
         return [{
-            id: 'anilist:error',
+            id: 'anilist-error',
             name: 'Chyba API',
             poster: 'https://via.placeholder.com/300x400/FF0000/FFFFFF?text=Chyba',
             isPlaceholder: true,
@@ -178,16 +185,18 @@ app.get('/', (req, res) => {
         .code { color: #a5f3fc; font-family: monospace; background: #000; padding: 10px 15px; border-radius: 6px; font-size: 1.1em; display: block; margin: 15px 0; }
         a.btn { color: #121212; background: #60a5fa; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block; margin-top: 10px; }
         a.btn:hover { background: #3b82f6; }
+        .note { font-size: 0.8em; color: #888; margin-top: 15px; }
     </style>
 </head>
 <body>
     <h1>AniList Metadata Addon</h1>
-    <p>Pure Metadata Provider pro Stremio (AniList API)</p>
+    <p>Pure Metadata Provider (Priorita Romaji názvů pro lepší hledání)</p>
     <div class="box">
         <div>Manifest URL:</div>
         <div class="code">${baseUrl}/manifest.json</div>
         <a href="stremio://${req.get('host')}/manifest.json" class="btn">🚀 Instalovat do Stremio</a>
     </div>
+    <div class="note">Poznámka: Pro streamování musíte mít nainstalovaný další addon (např. Torrentio).</div>
 </body>
 </html>`);
 });
@@ -200,7 +209,7 @@ const sendCatalog = async (res) => {
         const metas = animeList.map(anime => ({
             id: anime.id,
             type: 'series',
-            name: anime.name,
+            name: anime.name, // Zde vracíme Romaji název
             poster: anime.poster,
             background: anime.background,
             description: anime.isPlaceholder 
@@ -229,7 +238,8 @@ app.get('/meta/:type/:id.json', async (req, res) => {
     try {
         const animeId = req.params.id;
         
-        if (animeId.startsWith('anilist:')) {
+        // Podpora pro staré ID s dvojtečkou (kvůli kompatibilitě)
+        if (animeId.startsWith('anilist:') || animeId.startsWith('anilist-')) {
             const animeList = await fetchAiringToday();
             const anime = animeList.find(a => a.id === animeId);
 
@@ -249,10 +259,10 @@ app.get('/meta/:type/:id.json', async (req, res) => {
                     meta: {
                         id: anime.id,
                         type: 'series',
-                        name: anime.name,
+                        name: anime.name, // Romaji
                         poster: anime.poster,
                         background: anime.background,
-                        description: `${anime.description}\n\n\n📺 Dnes vychází epizoda: **${validEpisode}**\n⏰ Čas: ${airTime} (lokalizováno)\n⭐ Hodnocení: ${anime.rating}/100\n🎬 Studio: ${anime.studio}`,
+                        description: `${anime.description}\n\n\n📺 Dnes vychází epizoda: **${validEpisode}**\n⏰ Čas: ${airTime}\n⭐ Hodnocení: ${anime.rating}/100\n🎬 Studio: ${anime.studio}\n📌 Název pro hledání: ${anime.romaji}`,
                         genres: anime.genres,
                         releaseInfo: anime.year ? anime.year.toString() : '',
                         videos: [{
