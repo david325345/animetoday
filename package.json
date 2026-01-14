@@ -1,13 +1,14 @@
 {
-  "name": "anilist-metadata-addon",
-  "version": "1.0.0",
-  "description": "Pouze metadata pro dnešní anime (AniList)",
-  "main": "index.js",
+  "name": "anilist-nyaa-addon",
+  "version": "3.0.0",
+  "description": "AniList Metadata + Nyaa Stream Addon",
+  "main": "addon.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node addon.js"
   },
   "dependencies": {
     "axios": "^1.6.0",
+    "cheerio": "^1.0.0-rc.12",
     "cors": "^2.8.5",
     "express": "^4.18.2"
   },
