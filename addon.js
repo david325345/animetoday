@@ -5,6 +5,8 @@ const cors = require('cors');
 const app = express();
 
 // --- DŮLEŽITÁ OPRAVA PRO HTTPS ---
+// Říká Expressu, aby věřil hlavičkám z Render proxy.
+// Díky tomu req.protocol vrátí "https".
 app.set('trust proxy', true);
 // -------------------------------
 
@@ -31,9 +33,10 @@ const ADDON_CONFIG = {
     }]
 };
 
+// Cache pro data (20 minut)
 let animeCache = { data: [], timestamp: 0, ttl: 20 * 60 * 1000 };
 
-// --- Keep-Alive (Render) ---
+// --- Keep-Alive Funkce (Render.com) ---
 async function keepAlive() {
     try {
         const baseUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
@@ -48,20 +51,26 @@ setInterval(keepAlive, 10 * 60 * 1000);
 // --- AniList GraphQL API ---
 async function fetchAiringToday() {
     const now = Date.now();
+    
+    // Pokud máme čerstvá data, vrátíme je z cache
     if (animeCache.data.length > 0 && (now - animeCache.timestamp) < animeCache.ttl) {
         return animeCache.data;
     }
 
     try {
+        // Výpočet času v UTC
         const d = new Date();
         const startOfDayUTC = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
         
-        // Úprava pro ČR (UTC+1) - posun o hodinu dozadu
+        // --- ÚPRAVA ČASU PRO ČR (UTC+1) ---
+        // Odečteme 1 hodinu (3600s), aby "Dnes" začalo v 23:00 předchozího dne UTC.
         const todayStart = Math.floor(startOfDayUTC.getTime() / 1000) - 3600;
-        const todayEnd = todayStart + 86400;
+        const todayEnd = todayStart + 86400; // Okno 24 hodin
+        // ---------------------------------
 
         console.log(`🕒 Dotazuji AniList (Časové okno pro CET): ${todayStart} - ${todayEnd}`);
 
+        // OPRAVA API: airingSchedule -> airingSchedules (množné číslo)
         const query = `
             query ($from: Int, $to: Int) {
                 Page(page: 1, perPage: 30) {
@@ -102,7 +111,7 @@ async function fetchAiringToday() {
         const schedule = response.data.data.Page.airingSchedules;
         
         if (!schedule || schedule.length === 0) {
-            console.log('📭 Dnes dle AniList nic nevychází.');
+            console.log('📭 Dnes dle AniList (UTC) nevychází nic.');
             return [{
                 id: 'anilist:empty',
                 name: 'Dnes nic nevychází',
@@ -111,12 +120,13 @@ async function fetchAiringToday() {
             }];
         }
 
+        // Mapování dat z AniList do formátu pro Stremio
         const animeList = schedule.map(item => {
             const media = item.media;
             const title = media.title.english || media.title.romaji;
             
             return {
-                id: `anilist:${media.id}`, 
+                id: `anilist:${media.id}`, // ID použitelné v dalším addonu
                 anilistId: media.id,
                 name: title,
                 romaji: media.title.romaji,
@@ -142,6 +152,9 @@ async function fetchAiringToday() {
 
     } catch (error) {
         console.error('❌ AniList Error:', error.message);
+        if (error.response) {
+            console.error('API Response:', error.response.data);
+        }
         return [{
             id: 'anilist:error',
             name: 'Chyba API',
@@ -154,7 +167,9 @@ async function fetchAiringToday() {
 // --- ROUTES ---
 
 app.get('/', (req, res) => {
+    // Zjištění aktuálního protokolu
     const baseUrl = req.protocol + '://' + req.get('host');
+    
     res.send(`<!DOCTYPE html>
 <html lang="cs">
 <head>
@@ -167,15 +182,21 @@ app.get('/', (req, res) => {
         .code { color: #a5f3fc; font-family: monospace; background: #000; padding: 10px 15px; border-radius: 6px; font-size: 1.1em; display: block; margin: 15px 0; }
         a.btn { color: #121212; background: #60a5fa; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block; margin-top: 10px; }
         a.btn:hover { background: #3b82f6; }
+        .status { margin-top: 20px; font-size: 0.9em; color: #888; }
     </style>
 </head>
 <body>
     <h1>AniList Metadata Addon</h1>
-    <p>Pure Metadata Provider</p>
+    <p>Pure Metadata Provider pro Stremio</p>
+    
     <div class="box">
         <div>Manifest URL:</div>
         <div class="code">${baseUrl}/manifest.json</div>
-        <a href="stremio://${req.get('host')}/manifest.json" class="btn">🚀 Instalovat</a>
+        <a href="stremio://${req.get('host')}/manifest.json" class="btn">🚀 Instalovat do Stremio</a>
+    </div>
+    
+    <div class="status">
+        Protokol: <span style="color:${req.protocol === 'https' ? '#4ade80' : '#f87171'}">${req.protocol.toUpperCase()}</span>
     </div>
 </body>
 </html>`);
@@ -197,9 +218,9 @@ app.get('/catalog/:type/:id.json', async (req, res) => {
                 description: anime.isPlaceholder ? 'Žádný obsah' : `${anime.genres?.join(', ') || ''} • Rating: ${anime.rating || 0}`,
                 genres: anime.genres
             }));
-            return res.json({ metas }); // EXPLICIT RETURN
+            return res.json({ metas });
         } else {
-            return res.json({ metas: [] }); // EXPLICIT RETURN
+            return res.json({ metas: [] });
         }
     } catch (error) {
         console.error('Route Error:', error);
@@ -221,9 +242,9 @@ app.get('/catalog/:type/:id/:extra.json', async (req, res) => {
                 description: anime.isPlaceholder ? 'Žádný obsah' : `${anime.genres?.join(', ') || ''} • Rating: ${anime.rating || 0}`,
                 genres: anime.genres
             }));
-            return res.json({ metas }); // EXPLICIT RETURN
+            return res.json({ metas });
         } else {
-            return res.json({ metas: [] }); // EXPLICIT RETURN
+            return res.json({ metas: [] });
         }
     } catch (error) {
         console.error('Route Error:', error);
@@ -231,7 +252,7 @@ app.get('/catalog/:type/:id/:extra.json', async (req, res) => {
     }
 });
 
-// Detail
+// Detail - Metadata jednoho seriálu
 app.get('/meta/:type/:id.json', async (req, res) => {
     try {
         const animeId = req.params.id;
@@ -245,7 +266,19 @@ app.get('/meta/:type/:id.json', async (req, res) => {
                     return res.json({ meta: null });
                 }
 
-                const videoId = `${anime.id}:1:${anime.episode}`;
+                // --- OPRAVA PRO "COULD NOT DETERMINE ID" ---
+                // Pokud AniList nevráti číslo epizody (je null/undefined), parseInt vrátí NaN.
+                // To způsobí chybu ve Stremiu. Nastavíme fallback na 1.
+                let validEpisode = 1;
+                if (anime.episode !== undefined && anime.episode !== null) {
+                    const parsedEp = parseInt(anime.episode);
+                    if (!isNaN(parsedEp)) {
+                        validEpisode = parsedEp;
+                    }
+                }
+                // -------------------------------------------
+
+                const videoId = `${anime.id}:1:${validEpisode}`;
                 
                 const airTime = new Date(anime.airingAt * 1000).toLocaleTimeString('cs-CZ', { 
                     hour: '2-digit', minute: '2-digit' 
@@ -263,11 +296,11 @@ app.get('/meta/:type/:id.json', async (req, res) => {
                         releaseInfo: anime.year ? anime.year.toString() : '',
                         videos: [{
                             id: videoId,
-                            title: `Epizoda ${anime.episode}`,
+                            title: `Epizoda ${validEpisode}`,
                             season: 1,
-                            episode: parseInt(anime.episode),
+                            episode: validEpisode,
                             released: new Date(anime.airingAt * 1000).toISOString(),
-                            overview: `Dnes vychází epizoda ${anime.episode} ze ${anime.totalEpisodes || '?'}.`,
+                            overview: `Dnes vychází epizoda ${validEpisode} ze ${anime.totalEpisodes || '?'}.`,
                             thumbnail: anime.poster
                         }]
                     }
@@ -281,12 +314,12 @@ app.get('/meta/:type/:id.json', async (req, res) => {
     }
 });
 
-// Stream
+// Stream - Prázdný (Metadata Only)
 app.get('/stream/:type/:id.json', (req, res) => {
     return res.json({ streams: [] });
 });
 
-// Health
+// Health Check
 app.get('/health', (req, res) => {
     return res.json({ status: 'ok', cacheSize: animeCache.data.length });
 });
