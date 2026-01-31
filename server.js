@@ -123,11 +123,31 @@ async function getTodayAnime() {
 
 // ===== Nyaa API =====
 async function searchNyaa(animeName, episode) {
+  // Vyčistit název
+  const cleanName = (name) => name
+    .replace(/Season \d+/i, '')
+    .replace(/Part \d+/i, '')
+    .replace(/2nd Season/i, '')
+    .replace(/3rd Season/i, '')
+    .replace(/\([^)]*\)/g, '') // Odstranit závorky
+    .replace(/:/g, '') // Odstranit dvojtečky
+    .trim();
+  
   const variants = [
-    `${animeName} ${episode}`,
-    `${animeName.split(':')[0].trim()} ${episode}`,
-    `${animeName.replace(/Season \d+/i, '').replace(/Part \d+/i, '').trim()} ${episode}`
+    `${animeName} ${episode}`, // Plný název
+    `${cleanName(animeName)} ${episode}`, // Vyčištěný
+    `${animeName.split(':')[0].trim()} ${episode}`, // Před dvojtečkou
+    `${animeName.split('-')[0].trim()} ${episode}`, // Před pomlčkou
   ];
+  
+  // Přidat také variantu bez speciálních znaků
+  const noSpecialChars = animeName.replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (noSpecialChars !== animeName) {
+    variants.push(`${noSpecialChars} ${episode}`);
+  }
+
+  let allTorrents = [];
+  const seenHashes = new Set(); // Deduplikace
 
   for (const query of variants) {
     try {
@@ -137,14 +157,29 @@ async function searchNyaa(animeName, episode) {
         if (result?.length) torrents = torrents.concat(result);
         else break;
       }
+      
+      // Přidat jen unikátní torrenty
+      for (const t of torrents) {
+        const hash = t.magnet?.match(/btih:([a-zA-Z0-9]+)/)?.[1];
+        if (hash && !seenHashes.has(hash)) {
+          seenHashes.add(hash);
+          allTorrents.push(t);
+        }
+      }
+      
       if (torrents.length) {
         console.log(`Found ${torrents.length} torrents for "${query}"`);
-        return torrents.sort((a, b) => b.seeders - a.seeders);
       }
     } catch (err) {
       console.error(`Nyaa error: ${err.message}`);
     }
   }
+  
+  if (allTorrents.length) {
+    console.log(`Total unique: ${allTorrents.length} torrents`);
+    return allTorrents.sort((a, b) => b.seeders - a.seeders);
+  }
+  
   return [];
 }
 
