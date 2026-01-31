@@ -287,15 +287,6 @@ updateCache();
 builder.defineCatalogHandler(async (args) => {
   if (args.type !== 'series' || args.id !== 'anime-today') return { metas: [] };
   if (parseInt(args.extra?.skip) > 0) return { metas: [] };
-  
-  // Získat user TMDB klíč z config pokud existuje
-  let userTmdbKey = TMDB_API_KEY;
-  if (args.config?.config) {
-    try {
-      const config = JSON.parse(Buffer.from(args.config.config, 'base64').toString());
-      if (config.tmdb) userTmdbKey = config.tmdb;
-    } catch (err) {}
-  }
 
   return {
     metas: todayAnimeCache.map(s => {
@@ -382,18 +373,11 @@ builder.defineStreamHandler(async (args) => {
 
   if (!torrents.length) return { streams: [] };
 
-  // Dekódovat user config pro RD klíč
-  let rdKey = REALDEBRID_API_KEY;
-  if (args.config?.config) {
-    try {
-      const config = JSON.parse(Buffer.from(args.config.config, 'base64').toString());
-      if (config.rd) rdKey = config.rd;
-    } catch (err) {
-      console.error('Config decode error:', err.message);
-    }
-  }
-  
+  // Získat user RD klíč z args.config (Stremio posílá query parametry tady)
+  const rdKey = args.config?.rd || REALDEBRID_API_KEY;
   const baseUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+  
+  console.log('Stream request - RD key:', rdKey ? 'provided' : 'missing');
 
   return {
     streams: torrents.filter(t => t.magnet).map(t => {
@@ -422,21 +406,20 @@ const app = express();
 
 // Custom manifest s user keys
 app.get('/manifest.json', (req, res, next) => {
-  // Pokud je config v query, dekódovat a vytvořit custom manifest
-  if (req.query.config) {
-    try {
-      const config = JSON.parse(Buffer.from(req.query.config, 'base64').toString());
-      const customManifest = { ...manifest };
-      
-      // Unikátní ID pro každou konfiguraci
-      const configHash = req.query.config.substring(0, 10);
-      customManifest.id = `${manifest.id}.${configHash}`;
-      customManifest.name = 'Anime Today (Your Config)';
-      
-      return res.json(customManifest);
-    } catch (err) {
-      console.error('Config decode error:', err.message);
-    }
+  // Pokud jsou user keys v query, vytvořit custom manifest
+  if (req.query.rd || req.query.tmdb) {
+    const customManifest = { ...manifest };
+    
+    // Unikátní ID pro každou kombinaci klíčů
+    const keyHash = require('crypto').createHash('md5')
+      .update(`${req.query.rd || ''}${req.query.tmdb || ''}`)
+      .digest('hex')
+      .substring(0, 8);
+    
+    customManifest.id = `${manifest.id}.${keyHash}`;
+    customManifest.name = 'Anime Today (Personal)';
+    
+    return res.json(customManifest);
   }
   next();
 });
