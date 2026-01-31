@@ -71,8 +71,8 @@ async function getTodayAnime() {
   }
 }
 
-// Vyhledat na Nyaa
-async function searchNyaa(animeName, episode) {
+// Vyhledat na Nyaa a získat magnet linky
+async function searchNyaaWithMagnets(animeName, episode) {
   try {
     const cleanName = animeName
       .replace(/Season \d+/i, '')
@@ -102,34 +102,38 @@ async function searchNyaa(animeName, episode) {
       const link = item.link?.[0] || '';
       const nyaaId = link.match(/\/view\/(\d+)/);
       
+      // Zkusit získat magnet přímo z GUID nebo description
+      let magnetUrl = null;
+      
+      // Nyaa RSS má torrent link v guid nebo link
+      if (item.guid?.[0]) {
+        const guid = typeof item.guid[0] === 'string' ? item.guid[0] : item.guid[0]._;
+        if (guid.includes('magnet:')) {
+          magnetUrl = guid;
+        }
+      }
+      
+      // Fallback: vytvořit torrent download link
+      if (!magnetUrl && nyaaId) {
+        magnetUrl = `https://nyaa.si/download/${nyaaId[1]}.torrent`;
+      }
+      
       return {
         title: item.title?.[0] || '',
         nyaaId: nyaaId ? nyaaId[1] : null,
+        magnetUrl: magnetUrl,
         size: item['nyaa:size']?.[0] || 'Unknown',
         seeders: parseInt(item['nyaa:seeders']?.[0] || 0)
       };
     });
 
-    return torrents.sort((a, b) => b.seeders - a.seeders).slice(0, 5);
+    return torrents
+      .filter(t => t.magnetUrl) // Jen torrenty s linkem
+      .sort((a, b) => b.seeders - a.seeders)
+      .slice(0, 10);
   } catch (error) {
     console.error('Nyaa error:', error.message);
     return [];
-  }
-}
-
-// Získat magnet link
-async function getMagnetFromNyaa(nyaaId) {
-  try {
-    const response = await axios.get(`https://nyaa.si/view/${nyaaId}`, {
-      timeout: 10000,
-      headers: { 'User-Agent': 'Stremio-Anime-Addon/3.0' }
-    });
-
-    const magnetMatch = response.data.match(/magnet:\?xt=[^"]+/);
-    return magnetMatch ? magnetMatch[0] : null;
-  } catch (error) {
-    console.error('Magnet error:', error.message);
-    return null;
   }
 }
 
@@ -251,33 +255,23 @@ builder.defineStreamHandler(async (args) => {
   const animeName = schedule.media.title.romaji || schedule.media.title.english;
   
   // Vyhledat na Nyaa
-  const torrents = await searchNyaa(animeName, episode);
+  const torrents = await searchNyaaWithMagnets(animeName, episode);
 
   if (torrents.length === 0) {
     console.log('No torrents found');
     return { streams: [] };
   }
 
-  console.log(`Found ${torrents.length} torrents`);
-  const streams = [];
+  console.log(`Found ${torrents.length} torrents with links`);
 
-  // Získat magnet linky
-  for (const torrent of torrents) {
-    if (!torrent.nyaaId) continue;
-
-    const magnetUrl = await getMagnetFromNyaa(torrent.nyaaId);
-    
-    if (!magnetUrl) continue;
-
-    streams.push({
-      name: 'Nyaa',
-      title: `${torrent.title}\n👥 ${torrent.seeders} seeders | 📦 ${torrent.size}`,
-      url: magnetUrl,
-      behaviorHints: {
-        notWebReady: true
-      }
-    });
-  }
+  const streams = torrents.map(torrent => ({
+    name: 'Nyaa',
+    title: `${torrent.title}\n👥 ${torrent.seeders} seeders | 📦 ${torrent.size}`,
+    url: torrent.magnetUrl,
+    behaviorHints: {
+      notWebReady: true
+    }
+  }));
 
   console.log(`Returning ${streams.length} streams`);
   return { streams };
