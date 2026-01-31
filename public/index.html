@@ -3,14 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Anime Today + Nyaa - Stremio Addon</title>
+    <title>Anime Today + Nyaa</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -20,7 +15,6 @@
             justify-content: center;
             padding: 20px;
         }
-        
         .container {
             background: white;
             border-radius: 20px;
@@ -29,10 +23,8 @@
             width: 100%;
             box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
         }
-        
         .icon {
-            width: 80px;
-            height: 80px;
+            width: 80px; height: 80px;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             border-radius: 20px;
             display: flex;
@@ -41,7 +33,6 @@
             font-size: 40px;
             margin: 0 auto 24px;
         }
-        
         h1 {
             color: #1a1a1a;
             font-size: 28px;
@@ -49,57 +40,38 @@
             text-align: center;
             margin-bottom: 12px;
         }
-        
         .subtitle {
             color: #6b7280;
             font-size: 16px;
             text-align: center;
             margin-bottom: 32px;
         }
-        
-        .section {
-            margin-bottom: 24px;
-            padding: 20px;
-            background: #f9fafb;
-            border-radius: 12px;
-        }
-        
-        .section-title {
-            font-weight: 600;
-            color: #374151;
-            margin-bottom: 12px;
-            font-size: 14px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        
-        .input-group {
-            margin-bottom: 16px;
-        }
-        
+        .input-group { margin-bottom: 20px; }
         label {
             display: block;
             font-size: 14px;
-            font-weight: 500;
+            font-weight: 600;
             color: #374151;
             margin-bottom: 8px;
         }
-        
-        input[type="text"] {
+        .optional {
+            color: #9ca3af;
+            font-weight: normal;
+            font-size: 12px;
+        }
+        input {
             width: 100%;
             padding: 12px;
             border: 2px solid #e5e7eb;
             border-radius: 8px;
             font-size: 14px;
-            font-family: 'SF Mono', Monaco, monospace;
+            font-family: monospace;
             transition: border-color 0.2s;
         }
-        
-        input[type="text"]:focus {
+        input:focus {
             outline: none;
             border-color: #667eea;
         }
-        
         .btn {
             width: 100%;
             padding: 14px;
@@ -109,183 +81,117 @@
             font-weight: 600;
             cursor: pointer;
             transition: all 0.2s;
-            text-align: center;
             text-decoration: none;
             display: inline-block;
+            text-align: center;
         }
-        
         .btn-primary {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
-            margin-bottom: 12px;
+            margin-top: 20px;
         }
-        
         .btn-primary:hover {
             transform: translateY(-2px);
             box-shadow: 0 12px 24px rgba(102, 126, 234, 0.3);
         }
-        
-        .btn-secondary {
-            background: #10b981;
-            color: white;
+        .help {
+            font-size: 13px;
+            color: #6b7280;
+            margin-top: 8px;
         }
-        
-        .btn-secondary:hover {
-            background: #059669;
+        .help a {
+            color: #667eea;
+            text-decoration: none;
         }
-        
+        .help a:hover {
+            text-decoration: underline;
+        }
         .status {
             padding: 12px;
             border-radius: 8px;
-            margin-bottom: 16px;
+            margin-top: 20px;
             font-size: 14px;
         }
-        
-        .status-success {
-            background: #d1fae5;
-            color: #065f46;
-            border: 1px solid #10b981;
-        }
-        
         .status-error {
             background: #fee2e2;
             color: #991b1b;
             border: 1px solid #ef4444;
         }
-        
-        .help-text {
+        .info-box {
+            background: #f3f4f6;
+            border-radius: 12px;
+            padding: 16px;
+            margin-top: 24px;
+        }
+        .info-box h3 {
+            font-size: 14px;
+            font-weight: 600;
+            color: #374151;
+            margin-bottom: 8px;
+        }
+        .info-box p {
             font-size: 13px;
             color: #6b7280;
-            margin-top: 8px;
-        }
-        
-        .url-box {
-            background: white;
-            border: 2px solid #e5e7eb;
-            border-radius: 8px;
-            padding: 12px;
-            font-family: 'SF Mono', Monaco, monospace;
-            font-size: 13px;
-            word-break: break-all;
-            margin-bottom: 12px;
-        }
-        
-        @media (max-width: 600px) {
-            .container {
-                padding: 24px;
-            }
-            h1 {
-                font-size: 24px;
-            }
+            line-height: 1.6;
         }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="icon">📺</div>
-        
         <h1>Anime Today + Nyaa</h1>
         <p class="subtitle">Dnešní anime s torrenty z Nyaa přes RealDebrid</p>
         
-        <!-- API Keys Section -->
-        <div class="section">
-            <div class="section-title">🔑 Vaše API Klíče</div>
-            
-            <div id="statusMessage"></div>
-            
-            <div class="input-group">
-                <label for="rdKey">RealDebrid API Klíč (povinné)</label>
-                <input type="text" id="rdKey" placeholder="Váš RealDebrid API klíč" />
-                <div class="help-text">
-                    Získejte na <a href="https://real-debrid.com/apitoken" target="_blank">real-debrid.com/apitoken</a>
-                </div>
-            </div>
-            
-            <div class="input-group">
-                <label for="tmdbKey">TMDB API Klíč (volitelné)</label>
-                <input type="text" id="tmdbKey" placeholder="Váš TMDB API klíč (nepovinné)" />
-                <div class="help-text">
-                    Získejte na <a href="https://www.themoviedb.org/settings/api" target="_blank">themoviedb.org/settings/api</a>
-                </div>
+        <div class="input-group">
+            <label>RealDebrid API Klíč</label>
+            <input type="text" id="rdKey" placeholder="Váš RealDebrid klíč" />
+            <div class="help">
+                Získejte na <a href="https://real-debrid.com/apitoken" target="_blank">real-debrid.com/apitoken</a>
             </div>
         </div>
         
-        <!-- Install Section -->
-        <div class="section">
-            <div class="section-title">📦 Instalace do Stremio</div>
-            
-            <a href="#" id="installButton" class="btn btn-primary" onclick="install(event)">
-                🚀 Vygenerovat & Instalovat
-            </a>
-            
-            <div id="addonUrlContainer" style="display: none;">
-                <div class="url-box" id="addonUrl"></div>
-                <button class="btn btn-secondary" onclick="copyUrl()">📋 Zkopírovat URL</button>
+        <div class="input-group">
+            <label>TMDB API Klíč <span class="optional">(volitelné)</span></label>
+            <input type="text" id="tmdbKey" placeholder="Váš TMDB klíč (nepovinné)" />
+            <div class="help">
+                Pro HD wallpapery - získejte na <a href="https://www.themoviedb.org/settings/api" target="_blank">themoviedb.org/settings/api</a>
             </div>
         </div>
         
-        <!-- Info -->
-        <div class="section">
-            <div class="section-title">ℹ️ Bezpečnost</div>
-            <p style="font-size: 14px; color: #374151; line-height: 1.6;">
-                Každá instalace je unikátní s vašimi API klíči vloženými do addon URL. 
-                Vaše klíče jsou viditelné pouze ve Stremio a slouží jen vám. 
-                Nikdo jiný nemůže používat vaše kredity.
+        <a href="#" id="installBtn" class="btn btn-primary" onclick="install(event)">
+            🚀 Instalovat do Stremio
+        </a>
+        
+        <div id="status"></div>
+        
+        <div class="info-box">
+            <h3>ℹ️ O vašich klíčích</h3>
+            <p>
+                Vaše klíče jsou zakódované do addon URL a slouží pouze vám. 
+                Nikdo jiný nemůže používat vaše RealDebrid kredity. 
+                TMDB klíč je volitelný - pokud ho nezadáte, použijí se obrázky z AniList.
             </p>
         </div>
     </div>
 
     <script>
-        const baseUrl = window.location.origin;
-        
-        function showStatus(message, type) {
-            const statusDiv = document.getElementById('statusMessage');
-            const className = type === 'error' ? 'status-error' : 'status-success';
-            statusDiv.innerHTML = `<div class="status ${className}">${message}</div>`;
-        }
-        
-        function install(event) {
-            event.preventDefault();
+        function install(e) {
+            e.preventDefault();
+            const rd = document.getElementById('rdKey').value.trim();
+            const tmdb = document.getElementById('tmdbKey').value.trim();
             
-            const rdKey = document.getElementById('rdKey').value.trim();
-            const tmdbKey = document.getElementById('tmdbKey').value.trim();
-            
-            if (!rdKey) {
-                showStatus('⚠️ RealDebrid API klíč je povinný!', 'error');
+            if (!rd) {
+                document.getElementById('status').innerHTML = '<div class="status status-error">⚠️ RealDebrid klíč je povinný!</div>';
                 return;
             }
             
-            // Vytvořit query parametry
-            const params = new URLSearchParams();
-            params.append('rd', rdKey);
-            if (tmdbKey) params.append('tmdb', tmdbKey);
+            const config = btoa(JSON.stringify({ 
+                rd: rd,
+                tmdb: tmdb || undefined
+            }));
             
-            const manifestUrl = `${baseUrl}/manifest.json?${params.toString()}`;
-            const installUrl = `stremio://${baseUrl.replace(/^https?:\/\//, '')}/manifest.json?${params.toString()}`;
-            
-            // Zobrazit URL
-            document.getElementById('addonUrl').textContent = manifestUrl;
-            document.getElementById('addonUrlContainer').style.display = 'block';
-            
-            showStatus('✅ Addon URL vygenerována! Klikněte na tlačítko výše nebo použijte URL níže.', 'success');
-            
-            // Změnit tlačítko na přímou instalaci
-            const installBtn = document.getElementById('installButton');
-            installBtn.href = installUrl;
-            installBtn.textContent = '🚀 Instalovat do Stremio';
-            installBtn.onclick = null;
-        }
-        
-        function copyUrl() {
-            const url = document.getElementById('addonUrl').textContent;
-            navigator.clipboard.writeText(url).then(() => {
-                const btn = event.target;
-                const originalText = btn.textContent;
-                btn.textContent = '✓ Zkopírováno!';
-                setTimeout(() => btn.textContent = originalText, 2000);
-            }).catch(() => {
-                alert('URL: ' + url);
-            });
+            const url = `${window.location.origin}/${config}/manifest.json`;
+            window.location.href = url;
         }
     </script>
 </body>
