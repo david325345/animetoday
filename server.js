@@ -1,8 +1,6 @@
-const { addonBuilder, serveHTTP, getInterface } = require('stremio-addon-sdk');
+const { addonBuilder, serveHTTP } = require('stremio-addon-sdk');
 const axios = require('axios');
 const cron = require('node-cron');
-const express = require('express');
-const path = require('path');
 
 const PORT = process.env.PORT || 7000;
 
@@ -115,23 +113,7 @@ builder.defineCatalogHandler(async (args) => {
   return { metas: [] };
 });
 
-const addonInterface = builder.getInterface();
-const app = express();
+serveHTTP(builder.getInterface(), { port: PORT });
 
-app.use(express.static(path.join(__dirname, 'public')));
-
-// Stremio addon routes
-for (const resource in addonInterface) {
-  app.get(resource, addonInterface[resource]);
-}
-
-// Root - instalační stránka
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
-app.listen(PORT, () => {
-  console.log(`🚀 Anime Today Catalog běží na portu ${PORT}`);
-  console.log(`📺 Manifest: http://localhost:${PORT}/manifest.json`);
-  console.log(`🌐 Web: http://localhost:${PORT}/`);
-});
+console.log(`🚀 Anime Today Catalog běží na portu ${PORT}`);
+console.log(`📺 Manifest: http://localhost:${PORT}/manifest.json`);
