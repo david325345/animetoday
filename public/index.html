@@ -168,8 +168,7 @@
             <h3>ℹ️ O vašich klíčích</h3>
             <p>
                 Vaše klíče jsou zakódované do addon URL a slouží pouze vám. 
-                Nikdo jiný nemůže používat vaše RealDebrid kredity. 
-                TMDB klíč je volitelný - pokud ho nezadáte, použijí se obrázky z AniList.
+                Nikdo jiný nemůže používat vaše RealDebrid kredity.
             </p>
         </div>
     </div>
@@ -185,18 +184,12 @@
                 return;
             }
             
-            // Vytvořit config objekt - VŽDY včetně tmdb (i když prázdný)
+            // Použít query parametr místo path (bezpečnější pro base64)
             const configObj = { rd: rd };
-            if (tmdb) {
-                configObj.tmdb = tmdb;
-            }
+            if (tmdb) configObj.tmdb = tmdb;
             
             const config = btoa(JSON.stringify(configObj));
-            const url = `${window.location.origin}/${config}/manifest.json`;
-            
-            console.log('Config:', configObj);
-            console.log('Base64:', config);
-            console.log('URL:', url);
+            const url = `${window.location.origin}/manifest.json?c=${encodeURIComponent(config)}`;
             
             window.location.href = url;
         }
