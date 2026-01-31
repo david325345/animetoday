@@ -83,14 +83,17 @@ async function searchNyaa(animeName, episode) {
     try {
       console.log(`Nyaa API: "${query}"`);
       
-      const result = await si.search(query, 1, {
+      // si.searchAll() vrací všechny výsledky místo jen první stránky
+      const result = await si.searchAll(query, {
         filter: 0,
         category: '1_2' // Anime - English-translated
       });
 
       if (result && result.length > 0) {
-        console.log(`✅ Found ${result.length} torrents`);
-        return result;
+        // Seřadit podle seeders
+        const sorted = result.sort((a, b) => b.seeders - a.seeders);
+        console.log(`✅ Found ${sorted.length} torrents`);
+        return sorted;
       }
     } catch (error) {
       console.error(`Nyaa error for "${query}":`, error.message);
