@@ -425,10 +425,19 @@ app.get('/catalog/:type/:id.json', async (req, res) => {
   res.setHeader('Content-Type', 'application/json');
   res.setHeader('Access-Control-Allow-Origin', '*');
   try {
-    const result = await addonInterface[`/catalog/${req.params.type}/${req.params.id}.json`]({ query: req.query });
+    const handler = builder.getInterface().catalog;
+    if (!handler) {
+      return res.status(500).send({ metas: [] });
+    }
+    
+    const result = await handler({
+      type: req.params.type,
+      id: req.params.id,
+      extra: req.query
+    });
     res.send(result);
   } catch (err) {
-    console.error('Catalog error:', err);
+    console.error('Catalog error:', err.message);
     res.status(500).send({ metas: [] });
   }
 });
@@ -437,10 +446,19 @@ app.get('/meta/:type/:id.json', async (req, res) => {
   res.setHeader('Content-Type', 'application/json');
   res.setHeader('Access-Control-Allow-Origin', '*');
   try {
-    const result = await addonInterface[`/meta/${req.params.type}/${req.params.id}.json`]({ query: req.query });
+    const handler = builder.getInterface().meta;
+    if (!handler) {
+      return res.status(500).send({ meta: null });
+    }
+    
+    const result = await handler({
+      type: req.params.type,
+      id: req.params.id,
+      config: req.query
+    });
     res.send(result);
   } catch (err) {
-    console.error('Meta error:', err);
+    console.error('Meta error:', err.message);
     res.status(500).send({ meta: null });
   }
 });
@@ -449,10 +467,19 @@ app.get('/stream/:type/:id.json', async (req, res) => {
   res.setHeader('Content-Type', 'application/json');
   res.setHeader('Access-Control-Allow-Origin', '*');
   try {
-    const result = await addonInterface[`/stream/${req.params.type}/${req.params.id}.json`]({ query: req.query });
+    const handler = builder.getInterface().stream;
+    if (!handler) {
+      return res.status(500).send({ streams: [] });
+    }
+    
+    const result = await handler({
+      type: req.params.type,
+      id: req.params.id,
+      config: req.query
+    });
     res.send(result);
   } catch (err) {
-    console.error('Stream error:', err);
+    console.error('Stream error:', err.message);
     res.status(500).send({ streams: [] });
   }
 });
