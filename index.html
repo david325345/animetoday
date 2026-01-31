@@ -263,12 +263,16 @@
                         ✅ RealDebrid API klíč je uložen (${apiKey.substring(0, 10)}...)
                     </div>
                 `;
+                // Vyprázdnit input když je klíč uložen
+                document.getElementById('apiKey').value = '';
+                document.getElementById('apiKey').placeholder = 'Klíč je uložen - zadejte nový pro změnu';
             } else {
                 statusDiv.innerHTML = `
                     <div class="status status-warning">
                         ⚠️ RealDebrid API klíč není nastaven. Budete potřebovat torrent klienta.
                     </div>
                 `;
+                document.getElementById('apiKey').placeholder = 'Vložte RealDebrid API klíč';
             }
             
             updateInstallUrl();
@@ -309,12 +313,8 @@
             });
         }
         
-        // Načíst uložený klíč při načtení stránky
+        // Načíst status při načtení stránky (ale nezobrazovat klíč v inputu)
         window.addEventListener('load', () => {
-            const savedKey = localStorage.getItem('rd_api_key');
-            if (savedKey) {
-                document.getElementById('apiKey').value = savedKey;
-            }
             updateStatus();
         });
     </script>
