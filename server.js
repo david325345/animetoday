@@ -253,8 +253,16 @@ builder.defineCatalogHandler(async (args) => {
   if (args.type !== 'series' || args.id !== 'anime-today') return { metas: [] };
   if (parseInt(args.extra?.skip) > 0) return { metas: [] };
 
-  // Pro každý request můžeme použít user TMDB klíč pokud existuje
-  const userTmdbKey = args.config?.tmdb || TMDB_API_KEY;
+  // Extrahovat config z transportUrl pokud existuje
+  let userConfig = args.config || {};
+  if (args.transportUrl) {
+    const match = args.transportUrl.match(/[?&]c=([^&]+)/);
+    if (match) {
+      try {
+        userConfig = JSON.parse(Buffer.from(decodeURIComponent(match[1]), 'base64').toString());
+      } catch (e) {}
+    }
+  }
 
   return {
     metas: todayAnimeCache.map(s => {
@@ -329,11 +337,28 @@ builder.defineStreamHandler(async (args) => {
   }
   if (!torrents.length) return { streams: [] };
 
-  // Získat RD klíč z config
-  const rdKey = args.config?.rd;
-  const baseUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+  // Extrahovat config z transportUrl
+  let rdKey = null;
+  if (args.transportUrl) {
+    const match = args.transportUrl.match(/[?&]c=([^&]+)/);
+    if (match) {
+      try {
+        const config = JSON.parse(Buffer.from(decodeURIComponent(match[1]), 'base64').toString());
+        rdKey = config.rd;
+        console.log('Stream - RD key from transportUrl:', rdKey ? 'yes' : 'no');
+      } catch (e) {
+        console.error('Config decode error:', e.message);
+      }
+    }
+  }
   
-  console.log('Stream - RD key:', rdKey ? 'yes' : 'no');
+  // Fallback na args.config
+  if (!rdKey) {
+    rdKey = args.config?.rd;
+    console.log('Stream - RD key from args.config:', rdKey ? 'yes' : 'no');
+  }
+
+  const baseUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
 
   return {
     streams: torrents.filter(t => t.magnet).map(t => {
