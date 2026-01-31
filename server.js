@@ -1,22 +1,20 @@
-const { addonBuilder, getRouter } = require('stremio-addon-sdk');
+const { addonBuilder, serveHTTP } = require('stremio-addon-sdk');
 const axios = require('axios');
 const cron = require('node-cron');
 const express = require('express');
 const path = require('path');
 const { si } = require('nyaapi');
-const crypto = require('crypto');
 
 const PORT = process.env.PORT || 7000;
-const REALDEBRID_API_KEY = process.env.REALDEBRID_API_KEY || '';
 const TMDB_API_KEY = process.env.TMDB_API_KEY || '';
 
 let todayAnimeCache = [];
 
 const manifest = {
   id: 'cz.anime.nyaa.rd',
-  version: '1.2.0',
-  name: 'Anime Today + Nyaa + RealDebrid',
-  description: 'Dnešní anime epizody z AniList s torrenty z Nyaa.si',
+  version: '1.3.0',
+  name: 'Anime Today + Nyaa',
+  description: 'Dnešní anime s Nyaa torrenty přes RealDebrid',
   resources: ['catalog', 'meta', 'stream'],
   types: ['series'],
   catalogs: [{
@@ -32,51 +30,50 @@ const manifest = {
   }
 };
 
+// Funkce pro dekódování config z URL
+function decodeConfig(req) {
+  const urlPath = req.path || req.url;
+  const match = urlPath.match(/^\/([A-Za-z0-9+/=]+)\//);
+  if (match) {
+    try {
+      return JSON.parse(Buffer.from(match[1], 'base64').toString());
+    } catch (e) {}
+  }
+  return {};
+}
+
 const builder = new addonBuilder(manifest);
 
 // ===== TMDB API =====
 async function searchTMDB(animeName, year) {
   if (!TMDB_API_KEY) return null;
-  
   try {
     const response = await axios.get('https://api.themoviedb.org/3/search/tv', {
-      params: {
-        api_key: TMDB_API_KEY,
-        query: animeName,
-        first_air_date_year: year
-      },
+      params: { api_key: TMDB_API_KEY, query: animeName, first_air_date_year: year },
       timeout: 5000
     });
-    
     return response.data?.results?.[0]?.id || null;
   } catch (err) {
-    console.error('TMDB search error:', err.message);
     return null;
   }
 }
 
 async function getTMDBImages(tmdbId) {
   if (!TMDB_API_KEY || !tmdbId) return null;
-  
   try {
     const response = await axios.get(`https://api.themoviedb.org/3/tv/${tmdbId}/images`, {
       params: { api_key: TMDB_API_KEY },
       timeout: 5000
     });
-    
     const backdrops = response.data?.backdrops || [];
     const posters = response.data?.posters || [];
-    
-    // Vybrat nejlepší backdrop (nejčastěji en nebo bez jazyka)
     const backdrop = backdrops.find(b => b.iso_639_1 === 'en' || !b.iso_639_1) || backdrops[0];
     const poster = posters.find(p => p.iso_639_1 === 'en' || !p.iso_639_1) || posters[0];
-    
     return {
       backdrop: backdrop ? `https://image.tmdb.org/t/p/w1280${backdrop.file_path}` : null,
       poster: poster ? `https://image.tmdb.org/t/p/w500${poster.file_path}` : null
     };
   } catch (err) {
-    console.error('TMDB images error:', err.message);
     return null;
   }
 }
@@ -105,11 +102,9 @@ async function getTodayAnime() {
       }
     }
   `;
-
   const now = Math.floor(Date.now() / 1000);
   const dayStart = now - (now % 86400);
   const dayEnd = dayStart + 86400;
-
   try {
     const response = await axios.post('https://graphql.anilist.co', {
       query,
@@ -124,31 +119,25 @@ async function getTodayAnime() {
 
 // ===== Nyaa API =====
 async function searchNyaa(animeName, episode) {
-  // Vyčistit název
   const cleanName = (name) => name
-    .replace(/Season \d+/i, '')
-    .replace(/Part \d+/i, '')
-    .replace(/2nd Season/i, '')
-    .replace(/3rd Season/i, '')
-    .replace(/\([^)]*\)/g, '') // Odstranit závorky
-    .replace(/:/g, '') // Odstranit dvojtečky
-    .trim();
+    .replace(/Season \d+/i, '').replace(/Part \d+/i, '')
+    .replace(/2nd Season/i, '').replace(/3rd Season/i, '')
+    .replace(/\([^)]*\)/g, '').replace(/:/g, '').trim();
   
   const variants = [
-    `${animeName} ${episode}`, // Plný název
-    `${cleanName(animeName)} ${episode}`, // Vyčištěný
-    `${animeName.split(':')[0].trim()} ${episode}`, // Před dvojtečkou
-    `${animeName.split('-')[0].trim()} ${episode}`, // Před pomlčkou
+    `${animeName} ${episode}`,
+    `${cleanName(animeName)} ${episode}`,
+    `${animeName.split(':')[0].trim()} ${episode}`,
+    `${animeName.split('-')[0].trim()} ${episode}`,
   ];
   
-  // Přidat také variantu bez speciálních znaků
   const noSpecialChars = animeName.replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
   if (noSpecialChars !== animeName) {
     variants.push(`${noSpecialChars} ${episode}`);
   }
 
   let allTorrents = [];
-  const seenHashes = new Set(); // Deduplikace
+  const seenHashes = new Set();
 
   for (const query of variants) {
     try {
@@ -159,7 +148,6 @@ async function searchNyaa(animeName, episode) {
         else break;
       }
       
-      // Přidat jen unikátní torrenty
       for (const t of torrents) {
         const hash = t.magnet?.match(/btih:([a-zA-Z0-9]+)/)?.[1];
         if (hash && !seenHashes.has(hash)) {
@@ -180,29 +168,18 @@ async function searchNyaa(animeName, episode) {
     console.log(`Total unique: ${allTorrents.length} torrents`);
     return allTorrents.sort((a, b) => b.seeders - a.seeders);
   }
-  
   return [];
 }
 
 // ===== RealDebrid API =====
 async function getRealDebridStream(magnet, apiKey) {
   if (!apiKey) return null;
-  
   try {
-    console.log('RD: Adding magnet...');
-    
     const add = await axios.post(
       'https://api.real-debrid.com/rest/1.0/torrents/addMagnet',
       `magnet=${encodeURIComponent(magnet)}`,
-      { 
-        headers: { 
-          'Authorization': `Bearer ${apiKey}`, 
-          'Content-Type': 'application/x-www-form-urlencoded' 
-        },
-        timeout: 10000
-      }
+      { headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 10000 }
     );
-    
     const torrentId = add.data?.id;
     if (!torrentId) return null;
     
@@ -210,11 +187,10 @@ async function getRealDebridStream(magnet, apiKey) {
       `https://api.real-debrid.com/rest/1.0/torrents/info/${torrentId}`,
       { headers: { 'Authorization': `Bearer ${apiKey}` }}
     );
-
     const files = torrentInfo.data?.files;
     if (!files || files.length === 0) return null;
-
     const fileIds = files.map((f, i) => i + 1).join(',');
+    
     await axios.post(
       `https://api.real-debrid.com/rest/1.0/torrents/selectFiles/${torrentId}`,
       `files=${fileIds}`,
@@ -223,19 +199,16 @@ async function getRealDebridStream(magnet, apiKey) {
 
     for (let i = 0; i < 10; i++) {
       await new Promise(r => setTimeout(r, 2000));
-      
       const info = await axios.get(
         `https://api.real-debrid.com/rest/1.0/torrents/info/${torrentId}`,
         { headers: { 'Authorization': `Bearer ${apiKey}` }}
       );
-      
       if (info.data?.links?.[0]) {
         const unrestrict = await axios.post(
           'https://api.real-debrid.com/rest/1.0/unrestrict/link',
           `link=${encodeURIComponent(info.data.links[0])}`,
           { headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/x-www-form-urlencoded' }}
         );
-        
         if (unrestrict.data?.download) {
           console.log('RD: ✅ Success!');
           return unrestrict.data.download;
@@ -249,39 +222,29 @@ async function getRealDebridStream(magnet, apiKey) {
   }
 }
 
-// ===== Cache Update s TMDB =====
+// ===== Cache Update =====
 async function updateCache() {
-  console.log('🔄 Updating cache with TMDB images...');
+  console.log('🔄 Updating cache...');
   const schedules = await getTodayAnime();
-  
-  // Pro každé anime získat TMDB obrázky
   for (const schedule of schedules) {
     const media = schedule.media;
     const englishTitle = media.title.english || media.title.romaji;
     const year = media.seasonYear;
-    
-    // Vyhledat na TMDB
     const tmdbId = await searchTMDB(englishTitle, year);
     if (tmdbId) {
       const images = await getTMDBImages(tmdbId);
       if (images) {
-        // Uložit do média
         schedule.tmdbImages = images;
-        console.log(`✅ TMDB images for: ${englishTitle}`);
+        console.log(`✅ TMDB: ${englishTitle}`);
       }
     }
-    
-    // Malá pauza aby TMDB API nebyla přetížená
     await new Promise(r => setTimeout(r, 300));
   }
-  
   todayAnimeCache = schedules;
-  console.log(`✅ Cache: ${todayAnimeCache.length} anime (with TMDB images)`);
+  console.log(`✅ Cache: ${todayAnimeCache.length} anime`);
 }
 
-// Aktualizovat každý den ve 4 ráno
 cron.schedule('0 4 * * *', updateCache);
-// A také při startu
 updateCache();
 
 // ===== Stremio Handlers =====
@@ -289,17 +252,16 @@ builder.defineCatalogHandler(async (args) => {
   if (args.type !== 'series' || args.id !== 'anime-today') return { metas: [] };
   if (parseInt(args.extra?.skip) > 0) return { metas: [] };
 
+  // Pro každý request můžeme použít user TMDB klíč pokud existuje
+  const userTmdbKey = args.config?.tmdb || TMDB_API_KEY;
+
   return {
     metas: todayAnimeCache.map(s => {
-      // Validace posteru
       let poster = s.tmdbImages?.poster || s.media.coverImage.extraLarge || s.media.coverImage.large;
       if (!poster || poster === 'null' || poster === '') {
         poster = 'https://via.placeholder.com/230x345/1a1a2e/ffffff?text=No+Image';
       }
-      
-      // Background s fallbackem
       const background = s.media.bannerImage || s.tmdbImages?.backdrop || poster;
-      
       return {
         id: `nyaa:${s.media.id}:${s.episode}`,
         type: 'series',
@@ -319,19 +281,14 @@ builder.defineCatalogHandler(async (args) => {
 builder.defineMetaHandler(async (args) => {
   const [prefix, anilistId, episode] = args.id.split(':');
   if (prefix !== 'nyaa') return { meta: null };
-
   const schedule = todayAnimeCache.find(s => s.media.id === parseInt(anilistId) && s.episode === parseInt(episode));
-  if (!schedule) return { meta: null };
-
-  const m = schedule.media;
+  if (!schedule) return { meta: null};
   
-  // Validace posteru
+  const m = schedule.media;
   let poster = schedule.tmdbImages?.poster || m.coverImage.extraLarge || m.coverImage.large;
   if (!poster || poster === 'null' || poster === '') {
     poster = 'https://via.placeholder.com/230x345/1a1a2e/ffffff?text=No+Image';
   }
-  
-  // Background s fallbackem
   const background = m.bannerImage || schedule.tmdbImages?.backdrop || poster;
   
   return {
@@ -361,24 +318,21 @@ builder.defineMetaHandler(async (args) => {
 builder.defineStreamHandler(async (args) => {
   const [prefix, anilistId, episode] = args.id.split(':');
   if (prefix !== 'nyaa') return { streams: [] };
-
   const schedule = todayAnimeCache.find(s => s.media.id === parseInt(anilistId) && s.episode === parseInt(episode));
   if (!schedule) return { streams: [] };
 
   const m = schedule.media;
   let torrents = await searchNyaa(m.title.romaji || m.title.english, parseInt(episode));
-  
   if (!torrents.length && m.title.english !== m.title.romaji) {
     torrents = await searchNyaa(m.title.english || m.title.romaji, parseInt(episode));
   }
-
   if (!torrents.length) return { streams: [] };
 
-  // Získat user RD klíč z args.config (Stremio posílá query parametry tady)
-  const rdKey = args.config?.rd || REALDEBRID_API_KEY;
+  // Získat RD klíč z config
+  const rdKey = args.config?.rd;
   const baseUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
   
-  console.log('Stream request - RD key:', rdKey ? 'provided' : 'missing');
+  console.log('Stream - RD key:', rdKey ? 'yes' : 'no');
 
   return {
     streams: torrents.filter(t => t.magnet).map(t => {
@@ -405,30 +359,11 @@ builder.defineStreamHandler(async (args) => {
 // ===== Express Server =====
 const app = express();
 
-// Custom manifest s user keys
-app.get('/manifest.json', (req, res, next) => {
-  // Pokud jsou user keys v query, vytvořit custom manifest
-  if (req.query.rd || req.query.tmdb) {
-    const customManifest = { ...manifest };
-    
-    // Unikátní ID pro každou kombinaci klíčů
-    const keyHash = crypto.createHash('md5')
-      .update(`${req.query.rd || ''}${req.query.tmdb || ''}`)
-      .digest('hex')
-      .substring(0, 8);
-    
-    customManifest.id = `${manifest.id}.${keyHash}`;
-    customManifest.name = 'Anime Today (Personal)';
-    
-    console.log(`Custom manifest for hash: ${keyHash}`);
-    return res.json(customManifest);
-  }
-  next();
-});
-
-app.get('/', (req, res, next) => {
-  if (req.headers.accept && req.headers.accept.includes('text/html')) {
-    return res.sendFile(path.join(__dirname, 'public', 'index.html'));
+// Middleware pro dekódování config z URL
+app.use((req, res, next) => {
+  const config = decodeConfig(req);
+  if (config.rd) {
+    req.userConfig = config;
   }
   next();
 });
@@ -436,20 +371,12 @@ app.get('/', (req, res, next) => {
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/rd/:magnet', async (req, res) => {
-  const apiKey = req.query.key || REALDEBRID_API_KEY;
+  const apiKey = req.query.key;
   if (!apiKey) return res.status(400).send('API key required');
-  
   const stream = await getRealDebridStream(decodeURIComponent(req.params.magnet), apiKey);
   stream ? res.redirect(stream) : res.status(500).send('Failed');
 });
 
-const addonRouter = getRouter(builder.getInterface());
-app.use(addonRouter);
+serveHTTP(builder.getInterface(), { port: PORT, server: app });
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📺 Addon: http://localhost:${PORT}/manifest.json`);
-  console.log(`🌐 Web: http://localhost:${PORT}/`);
-  console.log(`🔑 RealDebrid: ${REALDEBRID_API_KEY ? '✅' : '❌'}`);
-  console.log(`🎬 TMDB: ${TMDB_API_KEY ? '✅' : '❌'}`);
-});
+console.log(`🚀 Server: http://localhost:${PORT}/`);
