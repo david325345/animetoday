@@ -4,6 +4,7 @@ const cron = require('node-cron');
 const express = require('express');
 const path = require('path');
 const { si } = require('nyaapi');
+const crypto = require('crypto');
 
 const PORT = process.env.PORT || 7000;
 const REALDEBRID_API_KEY = process.env.REALDEBRID_API_KEY || '';
@@ -411,7 +412,7 @@ app.get('/manifest.json', (req, res, next) => {
     const customManifest = { ...manifest };
     
     // Unikátní ID pro každou kombinaci klíčů
-    const keyHash = require('crypto').createHash('md5')
+    const keyHash = crypto.createHash('md5')
       .update(`${req.query.rd || ''}${req.query.tmdb || ''}`)
       .digest('hex')
       .substring(0, 8);
@@ -419,6 +420,7 @@ app.get('/manifest.json', (req, res, next) => {
     customManifest.id = `${manifest.id}.${keyHash}`;
     customManifest.name = 'Anime Today (Personal)';
     
+    console.log(`Custom manifest for hash: ${keyHash}`);
     return res.json(customManifest);
   }
   next();
