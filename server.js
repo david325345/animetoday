@@ -356,8 +356,13 @@ builder.defineStreamHandler(async (args) => {
 // Express server pro custom routes
 const app = express();
 
-// Servovat static soubory z public
-app.use('/setup', express.static(path.join(__dirname, 'public')));
+// Naše landing page na root
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// Servovat static soubory
+app.use(express.static(path.join(__dirname, 'public')));
 
 // RealDebrid callback
 app.get('/rd/:magnetUrl', async (req, res) => {
@@ -382,5 +387,5 @@ serveHTTP(builder.getInterface(), { port: PORT, server: app });
 
 console.log(`🚀 Anime Today + Nyaa běží na portu ${PORT}`);
 console.log(`📺 Manifest: http://localhost:${PORT}/manifest.json`);
-console.log(`🌐 Setup: http://localhost:${PORT}/setup/`);
+console.log(`🌐 Web: http://localhost:${PORT}/`);
 console.log(`🔑 RealDebrid: ${REALDEBRID_API_KEY ? '✅ Aktivní' : '❌ Neaktivní'}`);
