@@ -9,7 +9,7 @@ let lastUpdate = null;
 
 const manifest = {
   id: 'cz.anime.anilist.catalog',
-  version: '1.0.2',
+  version: '1.0.3',
   name: 'Anime Today Catalog',
   description: 'Katalog dnešních anime epizod z AniList',
   resources: ['catalog'],
@@ -21,7 +21,7 @@ const manifest = {
       name: 'Dnešní Anime Epizody'
     }
   ],
-  idPrefixes: ['anilist:']
+  idPrefixes: ['anilist:', 'kitsu:', 'mal:']
 };
 
 const builder = new addonBuilder(manifest);
@@ -36,6 +36,7 @@ async function getTodayAnime() {
           episode
           media {
             id
+            idMal
             title { romaji english native }
             coverImage { large }
             bannerImage
@@ -45,6 +46,10 @@ async function getTodayAnime() {
             episodes
             season
             seasonYear
+            externalLinks {
+              site
+              url
+            }
           }
         }
       }
@@ -92,8 +97,20 @@ builder.defineCatalogHandler(async (args) => {
     
     const metas = todayAnimeCache.map(schedule => {
       const media = schedule.media;
+      
+      // Najít Kitsu link pokud existuje (Stremio ho rozpozná lépe)
+      const kitsuLink = media.externalLinks?.find(link => link.site === 'Kitsu');
+      let id = `anilist:${media.id}`;
+      
+      if (kitsuLink) {
+        const kitsuId = kitsuLink.url.split('/').pop();
+        id = `kitsu:${kitsuId}`;
+      } else if (media.idMal) {
+        id = `mal:${media.idMal}`;
+      }
+      
       return {
-        id: `anilist:${media.id}`,
+        id: id,
         type: 'movie',
         name: `${media.title.romaji || media.title.english || media.title.native} - Epizoda ${schedule.episode}`,
         poster: media.coverImage.large,
