@@ -307,12 +307,15 @@ builder.defineStreamHandler(async (args) => {
   return {
     streams: torrents.filter(t => t.magnet).map(t => {
       if (rdKey) {
-        const externalUrl = `${baseUrl}/rd/${encodeURIComponent(t.magnet)}?key=${encodeURIComponent(rdKey)}`;
-        console.log('Stream URL:', externalUrl.substring(0, 100) + '...');
+        const streamUrl = `${baseUrl}/rd/${encodeURIComponent(t.magnet)}?key=${encodeURIComponent(rdKey)}`;
+        console.log('Stream URL:', streamUrl.substring(0, 100) + '...');
         return {
           name: 'Nyaa + RealDebrid',
           title: `🎬 ${t.name}\n👥 ${t.seeders} | 📦 ${t.filesize}`,
-          externalUrl: externalUrl
+          url: streamUrl,
+          behaviorHints: {
+            bingeGroup: 'nyaa-rd'
+          }
         };
       } else {
         return {
