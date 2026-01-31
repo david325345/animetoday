@@ -255,8 +255,14 @@ builder.defineCatalogHandler(async (args) => {
 
   return {
     metas: todayAnimeCache.map(s => {
-      const poster = s.tmdbImages?.poster || s.media.coverImage.extraLarge || s.media.coverImage.large;
-      // Preferovat AniList banner (je lepší formátovaný pro Stremio)
+      // Zajistit že poster je vždy validní URL
+      let poster = s.tmdbImages?.poster || s.media.coverImage.extraLarge || s.media.coverImage.large;
+      // Fallback placeholder pokud všechno selže
+      if (!poster || poster === 'null' || poster === '') {
+        poster = 'https://via.placeholder.com/230x345/1a1a2e/ffffff?text=No+Image';
+      }
+      
+      // Background s fallbackem
       const background = s.media.bannerImage || s.tmdbImages?.backdrop || poster;
       
       return {
@@ -264,8 +270,8 @@ builder.defineCatalogHandler(async (args) => {
         type: 'series',
         name: s.media.title.romaji || s.media.title.english || s.media.title.native,
         poster: poster,
-        background: background,
-        logo: s.media.bannerImage,
+        background: background || poster,
+        logo: s.media.bannerImage || undefined,
         description: `Epizoda ${s.episode}\n\n${(s.media.description || '').replace(/<[^>]*>/g, '')}`,
         genres: s.media.genres || [],
         releaseInfo: `${s.media.season || ''} ${s.media.seasonYear || ''} - Ep ${s.episode}`.trim(),
@@ -283,8 +289,14 @@ builder.defineMetaHandler(async (args) => {
   if (!schedule) return { meta: null };
 
   const m = schedule.media;
-  const poster = schedule.tmdbImages?.poster || m.coverImage.extraLarge || m.coverImage.large;
-  // Preferovat AniList banner před TMDB
+  
+  // Validace posteru
+  let poster = schedule.tmdbImages?.poster || m.coverImage.extraLarge || m.coverImage.large;
+  if (!poster || poster === 'null' || poster === '') {
+    poster = 'https://via.placeholder.com/230x345/1a1a2e/ffffff?text=No+Image';
+  }
+  
+  // Background s fallbackem
   const background = m.bannerImage || schedule.tmdbImages?.backdrop || poster;
   
   return {
@@ -293,8 +305,8 @@ builder.defineMetaHandler(async (args) => {
       type: 'series',
       name: m.title.romaji || m.title.english || m.title.native,
       poster: poster,
-      background: background,
-      logo: m.bannerImage,
+      background: background || poster,
+      logo: m.bannerImage || undefined,
       description: (m.description || '').replace(/<[^>]*>/g, ''),
       genres: m.genres || [],
       releaseInfo: `${m.season || ''} ${m.seasonYear || ''} - Epizoda ${schedule.episode}`.trim(),
