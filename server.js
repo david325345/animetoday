@@ -2,18 +2,12 @@ const { addonBuilder, serveHTTP } = require('stremio-addon-sdk');
 const axios = require('axios');
 const cron = require('node-cron');
 const express = require('express');
-const Nyaa = require('nyaa-si');
+const { si } = require('nyaapi');
 
 const PORT = process.env.PORT || 7000;
 const REALDEBRID_API_KEY = process.env.REALDEBRID_API_KEY || '';
 
 let todayAnimeCache = [];
-
-// Inicializace Nyaa API
-const nyaa = new Nyaa({
-  baseUrl: 'https://nyaa.si',
-  mode: 'html'
-});
 
 const manifest = {
   id: 'cz.anime.nyaa.direct',
@@ -89,16 +83,14 @@ async function searchNyaa(animeName, episode) {
     try {
       console.log(`Nyaa API: "${query}"`);
       
-      const result = await nyaa.search(query, {
-        category: 'anime',
-        filter: 'no filter',
-        sort: 'seeders',
-        order: 'desc'
+      const result = await si.search(query, 1, {
+        filter: 0,
+        category: '1_2' // Anime - English-translated
       });
 
-      if (result?.data?.length > 0) {
-        console.log(`✅ Found ${result.data.length} torrents`);
-        return result.data;
+      if (result && result.length > 0) {
+        console.log(`✅ Found ${result.length} torrents`);
+        return result;
       }
     } catch (error) {
       console.error(`Nyaa error for "${query}":`, error.message);
@@ -333,13 +325,13 @@ builder.defineStreamHandler(async (args) => {
     if (REALDEBRID_API_KEY) {
       streams.push({
         name: 'Nyaa + RealDebrid',
-        title: `🎬 ${torrent.name}\n👥 ${torrent.seeders} seeders | 📦 ${torrent.size}`,
+        title: `🎬 ${torrent.name}\n👥 ${torrent.seeders} seeders | 📦 ${torrent.filesize}`,
         externalUrl: `${process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`}/rd/${encodeURIComponent(torrent.magnet)}`
       });
     } else {
       streams.push({
         name: 'Nyaa (Magnet)',
-        title: `${torrent.name}\n👥 ${torrent.seeders} seeders | 📦 ${torrent.size}`,
+        title: `${torrent.name}\n👥 ${torrent.seeders} seeders | 📦 ${torrent.filesize}`,
         url: torrent.magnet,
         behaviorHints: {
           notWebReady: true

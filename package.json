@@ -9,10 +9,9 @@
   "dependencies": {
     "stremio-addon-sdk": "^1.6.10",
     "axios": "^1.6.0",
-    "xml2js": "^0.6.2",
     "node-cron": "^3.0.3",
     "express": "^4.18.2",
-    "nyaa-si": "^3.0.2"
+    "nyaapi": "^2.4.4"
   },
   "engines": {
     "node": ">=14.0.0"
