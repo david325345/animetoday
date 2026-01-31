@@ -125,12 +125,6 @@
             box-shadow: 0 12px 24px rgba(102, 126, 234, 0.3);
         }
         
-        .btn-primary:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-            transform: none;
-        }
-        
         .btn-secondary {
             background: #10b981;
             color: white;
@@ -151,12 +145,6 @@
             background: #d1fae5;
             color: #065f46;
             border: 1px solid #10b981;
-        }
-        
-        .status-warning {
-            background: #fef3c7;
-            color: #92400e;
-            border: 1px solid #f59e0b;
         }
         
         .status-error {
@@ -201,7 +189,7 @@
         
         <!-- API Keys Section -->
         <div class="section">
-            <div class="section-title">🔑 API Klíče</div>
+            <div class="section-title">🔑 Vaše API Klíče</div>
             
             <div id="statusMessage"></div>
             
@@ -214,7 +202,7 @@
             </div>
             
             <div class="input-group">
-                <label for="tmdbKey">TMDB API Klíč (volitelné - pro HD wallpapery)</label>
+                <label for="tmdbKey">TMDB API Klíč (volitelné)</label>
                 <input type="text" id="tmdbKey" placeholder="Váš TMDB API klíč (nepovinné)" />
                 <div class="help-text">
                     Získejte na <a href="https://www.themoviedb.org/settings/api" target="_blank">themoviedb.org/settings/api</a>
@@ -238,10 +226,11 @@
         
         <!-- Info -->
         <div class="section">
-            <div class="section-title">ℹ️ Jak to funguje</div>
+            <div class="section-title">ℹ️ Bezpečnost</div>
             <p style="font-size: 14px; color: #374151; line-height: 1.6;">
-                Každá instalace je unikátní s vašimi API klíči. Váš RealDebrid klíč je zakódovaný do addon URL, 
-                takže nikdo jiný nemůže používat vaše kredity. TMDB klíč je volitelný a přidá HD wallpapery.
+                Každá instalace je unikátní s vašimi API klíči vloženými do addon URL. 
+                Vaše klíče jsou viditelné pouze ve Stremio a slouží jen vám. 
+                Nikdo jiný nemůže používat vaše kredity.
             </p>
         </div>
     </div>
@@ -251,8 +240,7 @@
         
         function showStatus(message, type) {
             const statusDiv = document.getElementById('statusMessage');
-            const className = type === 'error' ? 'status-error' : 
-                            type === 'warning' ? 'status-warning' : 'status-success';
+            const className = type === 'error' ? 'status-error' : 'status-success';
             statusDiv.innerHTML = `<div class="status ${className}">${message}</div>`;
         }
         
@@ -267,24 +255,25 @@
                 return;
             }
             
-            // Zakódovat klíče do base64 pro bezpečnost
-            const config = btoa(JSON.stringify({
-                rd: rdKey,
-                tmdb: tmdbKey || undefined
-            }));
+            // Vytvořit query parametry
+            const params = new URLSearchParams();
+            params.append('rd', rdKey);
+            if (tmdbKey) params.append('tmdb', tmdbKey);
             
-            // Vytvořit addon URL s unikátním config
-            const manifestUrl = `${baseUrl}/manifest.json?config=${config}`;
-            const installUrl = `stremio://${baseUrl.replace(/^https?:\/\//, '')}/manifest.json?config=${config}`;
+            const manifestUrl = `${baseUrl}/manifest.json?${params.toString()}`;
+            const installUrl = `stremio://${baseUrl.replace(/^https?:\/\//, '')}/manifest.json?${params.toString()}`;
             
             // Zobrazit URL
             document.getElementById('addonUrl').textContent = manifestUrl;
             document.getElementById('addonUrlContainer').style.display = 'block';
             
-            showStatus('✅ Addon URL vygenerována! Klikněte na tlačítko níže pro instalaci.', 'success');
+            showStatus('✅ Addon URL vygenerována! Klikněte na tlačítko výše nebo použijte URL níže.', 'success');
             
-            // Pokusit se otevřít Stremio
-            window.location.href = installUrl;
+            // Změnit tlačítko na přímou instalaci
+            const installBtn = document.getElementById('installButton');
+            installBtn.href = installUrl;
+            installBtn.textContent = '🚀 Instalovat do Stremio';
+            installBtn.onclick = null;
         }
         
         function copyUrl() {
