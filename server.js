@@ -221,10 +221,25 @@ builder.defineStreamHandler(async (args) => {
 
   if (!torrents.length) return { streams: [] };
 
-  const rdKey = args.config?.rd || REALDEBRID_API_KEY;
+  // Získat RD klíč z transportUrl nebo args.config
+  let rdKey = REALDEBRID_API_KEY;
+  
+  // Zkusit získat z transport URL (Stremio ho tam dává)
+  if (args.transportUrl) {
+    const match = args.transportUrl.match(/[?&]rd=([^&]+)/);
+    if (match) rdKey = decodeURIComponent(match[1]);
+  }
+  
+  // Fallback na args.config
+  if (!rdKey && args.config?.rd) {
+    rdKey = args.config.rd;
+  }
+  
   const baseUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
   
   console.log('Creating streams with RD key:', rdKey ? 'yes' : 'no');
+  console.log('Transport URL:', args.transportUrl?.substring(0, 100));
+  console.log('Args config:', JSON.stringify(args.config));
   console.log('Base URL:', baseUrl);
 
   return {
