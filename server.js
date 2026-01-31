@@ -1,4 +1,4 @@
-const { addonBuilder, serveHTTP } = require('stremio-addon-sdk');
+const { addonBuilder } = require('stremio-addon-sdk');
 const axios = require('axios');
 const cron = require('node-cron');
 const express = require('express');
@@ -382,12 +382,52 @@ app.get('/rd/:magnet', async (req, res) => {
   stream ? res.redirect(stream) : res.status(500).send('Failed');
 });
 
-// Nejdřív SDK routes
-serveHTTP(builder.getInterface(), { port: PORT, server: app });
-
-// Pak override root route pro naši landing page
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+// Custom manifest handler pro config v PATH
+app.get('/:config/manifest.json', (req, res) => {
+  try {
+    const config = JSON.parse(Buffer.from(req.params.config, 'base64').toString());
+    const customManifest = { ...manifest };
+    customManifest.id = `${manifest.id}.${req.params.config.substring(0, 8)}`;
+    customManifest.name = 'Anime Today (Personal)';
+    res.json(customManifest);
+  } catch (err) {
+    res.status(400).json({ error: 'Invalid config' });
+  }
 });
 
-console.log(`🚀 Server: http://localhost:${PORT}/`);
+// Addon router z SDK (bez serveHTTP)
+const addonInterface = builder.getInterface();
+
+app.get('/:config/catalog/:type/:id.json', async (req, res) => {
+  try {
+    const config = JSON.parse(Buffer.from(req.params.config, 'base64').toString());
+    const result = await addonInterface.catalog({ type: req.params.type, id: req.params.id, extra: req.query, config });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ metas: [] });
+  }
+});
+
+app.get('/:config/meta/:type/:id.json', async (req, res) => {
+  try {
+    const config = JSON.parse(Buffer.from(req.params.config, 'base64').toString());
+    const result = await addonInterface.meta({ type: req.params.type, id: req.params.id, config });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ meta: null });
+  }
+});
+
+app.get('/:config/stream/:type/:id.json', async (req, res) => {
+  try {
+    const config = JSON.parse(Buffer.from(req.params.config, 'base64').toString());
+    const result = await addonInterface.stream({ type: req.params.type, id: req.params.id, config });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ streams: [] });
+  }
+});
+
+app.listen(PORT, () => {
+  console.log(`🚀 Server: http://localhost:${PORT}/`);
+});
