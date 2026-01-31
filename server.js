@@ -11,19 +11,17 @@ const REALDEBRID_API_KEY = process.env.REALDEBRID_API_KEY || '';
 let todayAnimeCache = [];
 
 const manifest = {
-  id: 'cz.anime.nyaa.direct',
-  version: '4.0.1',
-  name: 'Anime Today + Nyaa',
-  description: 'Dnešní anime s Nyaa torrenty přes RealDebrid',
+  id: 'cz.anime.nyaa.rd',
+  version: '1.0.0',
+  name: 'Anime Today + Nyaa + RealDebrid',
+  description: 'Dnešní anime epizody z AniList s torrenty z Nyaa.si',
   resources: ['catalog', 'meta', 'stream'],
   types: ['series'],
-  catalogs: [
-    {
-      type: 'series',
-      id: 'anime-today-nyaa',
-      name: 'Dnešní Anime (Nyaa)'
-    }
-  ],
+  catalogs: [{
+    type: 'series',
+    id: 'anime-today',
+    name: 'Dnešní Anime'
+  }],
   idPrefixes: ['nyaa:'],
   behaviorHints: {
     configurable: true,
@@ -33,6 +31,7 @@ const manifest = {
 
 const builder = new addonBuilder(manifest);
 
+// ===== AniList API =====
 async function getTodayAnime() {
   const query = `
     query ($weekStart: Int, $weekEnd: Int) {
@@ -63,151 +62,92 @@ async function getTodayAnime() {
 
   try {
     const response = await axios.post('https://graphql.anilist.co', {
-      query: query,
+      query,
       variables: { weekStart: dayStart, weekEnd: dayEnd }
     });
-
-    if (response.data?.data?.Page?.airingSchedules) {
-      return response.data.data.Page.airingSchedules;
-    }
-    return [];
+    return response.data?.data?.Page?.airingSchedules || [];
   } catch (error) {
     console.error('AniList error:', error.message);
     return [];
   }
 }
 
+// ===== Nyaa API =====
 async function searchNyaa(animeName, episode) {
-  const searchVariants = [
+  const variants = [
     `${animeName} ${episode}`,
     `${animeName.split(':')[0].trim()} ${episode}`,
     `${animeName.replace(/Season \d+/i, '').replace(/Part \d+/i, '').trim()} ${episode}`
   ];
 
-  for (const query of searchVariants) {
+  for (const query of variants) {
     try {
-      console.log(`Nyaa API: "${query}"`);
-      
-      let allTorrents = [];
-      
+      let torrents = [];
       for (let page = 1; page <= 2; page++) {
-        try {
-          const result = await si.searchPage(query, page, {
-            filter: 0,
-            category: '1_2'
-          });
-          
-          if (result && result.length > 0) {
-            allTorrents = allTorrents.concat(result);
-          } else {
-            break;
-          }
-        } catch (err) {
-          console.error(`Page ${page} failed:`, err.message);
-          break;
-        }
+        const result = await si.searchPage(query, page, { filter: 0, category: '1_2' });
+        if (result?.length) torrents = torrents.concat(result);
+        else break;
       }
-
-      if (allTorrents.length > 0) {
-        const sorted = allTorrents.sort((a, b) => b.seeders - a.seeders);
-        console.log(`✅ Found ${sorted.length} torrents`);
-        return sorted;
+      if (torrents.length) {
+        console.log(`Found ${torrents.length} torrents for "${query}"`);
+        return torrents.sort((a, b) => b.seeders - a.seeders);
       }
-    } catch (error) {
-      console.error(`Nyaa error for "${query}":`, error.message);
+    } catch (err) {
+      console.error(`Nyaa error: ${err.message}`);
     }
   }
-
-  console.log('No torrents found');
   return [];
 }
 
-async function getRealDebridStream(magnetUrl, apiKey) {
-  if (!apiKey) {
-    return null;
-  }
-
+// ===== RealDebrid API =====
+async function getRealDebridStream(magnet, apiKey) {
+  if (!apiKey) return null;
+  
   try {
-    console.log(`RealDebrid: Adding magnet...`);
-    
-    const addResponse = await axios.post(
+    // Add magnet
+    const add = await axios.post(
       'https://api.real-debrid.com/rest/1.0/torrents/addMagnet',
-      `magnet=${encodeURIComponent(magnetUrl)}`,
-      {
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/x-www-form-urlencoded'
-        },
-        timeout: 10000
-      }
+      `magnet=${encodeURIComponent(magnet)}`,
+      { headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/x-www-form-urlencoded' }}
     );
+    
+    const torrentId = add.data?.id;
+    if (!torrentId) return null;
 
-    if (!addResponse.data?.id) {
-      return null;
-    }
-
-    const torrentId = addResponse.data.id;
-
+    // Select files
     await axios.post(
       `https://api.real-debrid.com/rest/1.0/torrents/selectFiles/${torrentId}`,
       'files=all',
-      {
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/x-www-form-urlencoded'
-        },
-        timeout: 5000
-      }
+      { headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/x-www-form-urlencoded' }}
     );
 
-    let links = null;
+    // Wait and get links
     for (let i = 0; i < 5; i++) {
-      await new Promise(resolve => setTimeout(resolve, 2000));
-
-      const infoResponse = await axios.get(
+      await new Promise(r => setTimeout(r, 2000));
+      const info = await axios.get(
         `https://api.real-debrid.com/rest/1.0/torrents/info/${torrentId}`,
-        {
-          headers: { 'Authorization': `Bearer ${apiKey}` },
-          timeout: 5000
-        }
+        { headers: { 'Authorization': `Bearer ${apiKey}` }}
       );
-
-      if (infoResponse.data?.links?.[0]) {
-        links = infoResponse.data.links;
-        break;
+      if (info.data?.links?.[0]) {
+        // Unrestrict
+        const unrestrict = await axios.post(
+          'https://api.real-debrid.com/rest/1.0/unrestrict/link',
+          `link=${encodeURIComponent(info.data.links[0])}`,
+          { headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/x-www-form-urlencoded' }}
+        );
+        return unrestrict.data?.download || null;
       }
     }
-
-    if (!links || links.length === 0) {
-      return null;
-    }
-
-    const unrestrictResponse = await axios.post(
-      'https://api.real-debrid.com/rest/1.0/unrestrict/link',
-      `link=${encodeURIComponent(links[0])}`,
-      {
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/x-www-form-urlencoded'
-        },
-        timeout: 5000
-      }
-    );
-
-    if (unrestrictResponse.data?.download) {
-      console.log(`✅ RealDebrid: Success!`);
-      return unrestrictResponse.data.download;
-    }
-
     return null;
-  } catch (error) {
-    console.error('RealDebrid error:', error.message);
+  } catch (err) {
+    console.error('RealDebrid error:', err.message);
     return null;
   }
 }
 
+// ===== Cache =====
 async function updateCache() {
-  console.log('Aktualizace cache...');
+  console.log('Updating cache...');
   todayAnimeCache = await getTodayAnime();
   console.log(`Cache: ${todayAnimeCache.length} anime`);
 }
@@ -215,177 +155,109 @@ async function updateCache() {
 updateCache();
 cron.schedule('*/15 * * * *', updateCache);
 
+// ===== Stremio Handlers =====
 builder.defineCatalogHandler(async (args) => {
-  if (args.type === 'series' && args.id === 'anime-today-nyaa') {
-    const skip = parseInt(args.extra?.skip) || 0;
-    
-    if (skip > 0) {
-      return { metas: [] };
-    }
-    
-    const metas = todayAnimeCache.map(schedule => {
-      const media = schedule.media;
-      const id = `nyaa:${media.id}:${schedule.episode}`;
-      
-      return {
-        id: id,
-        type: 'series',
-        name: media.title.romaji || media.title.english || media.title.native,
-        poster: media.coverImage.large,
-        background: media.bannerImage,
-        description: `Epizoda ${schedule.episode}\n\n${media.description ? media.description.replace(/<[^>]*>/g, '') : ''}`,
-        genres: media.genres || [],
-        releaseInfo: `${media.season || ''} ${media.seasonYear || ''} - Ep ${schedule.episode}`.trim(),
-        imdbRating: media.averageScore ? (media.averageScore / 10).toFixed(1) : undefined
-      };
-    });
+  if (args.type !== 'series' || args.id !== 'anime-today') return { metas: [] };
+  if (parseInt(args.extra?.skip) > 0) return { metas: [] };
 
-    console.log(`Catalog: ${metas.length} metas`);
-    return { metas };
-  }
-
-  return { metas: [] };
+  return {
+    metas: todayAnimeCache.map(s => ({
+      id: `nyaa:${s.media.id}:${s.episode}`,
+      type: 'series',
+      name: s.media.title.romaji || s.media.title.english || s.media.title.native,
+      poster: s.media.coverImage.large,
+      background: s.media.bannerImage,
+      description: `Epizoda ${s.episode}\n\n${(s.media.description || '').replace(/<[^>]*>/g, '')}`,
+      genres: s.media.genres || [],
+      releaseInfo: `${s.media.season || ''} ${s.media.seasonYear || ''} - Ep ${s.episode}`.trim(),
+      imdbRating: s.media.averageScore ? (s.media.averageScore / 10).toFixed(1) : undefined
+    }))
+  };
 });
 
 builder.defineMetaHandler(async (args) => {
-  const idParts = args.id.split(':');
-  
-  if (idParts[0] !== 'nyaa' || idParts.length !== 3) {
-    return { meta: null };
-  }
+  const [prefix, anilistId, episode] = args.id.split(':');
+  if (prefix !== 'nyaa') return { meta: null };
 
-  const anilistId = parseInt(idParts[1]);
-  const episode = parseInt(idParts[2]);
+  const schedule = todayAnimeCache.find(s => s.media.id === parseInt(anilistId) && s.episode === parseInt(episode));
+  if (!schedule) return { meta: null };
 
-  const schedule = todayAnimeCache.find(s => 
-    s.media.id === anilistId && s.episode === episode
-  );
-
-  if (!schedule) {
-    return { meta: null };
-  }
-
-  const media = schedule.media;
-
+  const m = schedule.media;
   return {
     meta: {
       id: args.id,
       type: 'series',
-      name: media.title.romaji || media.title.english || media.title.native,
-      poster: media.coverImage.large,
-      background: media.bannerImage,
-      description: media.description ? media.description.replace(/<[^>]*>/g, '') : '',
-      genres: media.genres || [],
-      releaseInfo: `${media.season || ''} ${media.seasonYear || ''} - Epizoda ${schedule.episode}`.trim(),
-      imdbRating: media.averageScore ? (media.averageScore / 10).toFixed(1).toString() : undefined,
-      videos: [
-        {
-          id: args.id,
-          title: `Epizoda ${schedule.episode}`,
-          episode: schedule.episode,
-          season: 1,
-          released: new Date(schedule.airingAt * 1000).toISOString()
-        }
-      ]
+      name: m.title.romaji || m.title.english || m.title.native,
+      poster: m.coverImage.large,
+      background: m.bannerImage,
+      description: (m.description || '').replace(/<[^>]*>/g, ''),
+      genres: m.genres || [],
+      releaseInfo: `${m.season || ''} ${m.seasonYear || ''} - Epizoda ${schedule.episode}`.trim(),
+      imdbRating: m.averageScore ? (m.averageScore / 10).toFixed(1).toString() : undefined,
+      videos: [{
+        id: args.id,
+        title: `Epizoda ${schedule.episode}`,
+        episode: schedule.episode,
+        season: 1,
+        released: new Date(schedule.airingAt * 1000).toISOString()
+      }]
     }
   };
 });
 
 builder.defineStreamHandler(async (args) => {
-  console.log('Stream request:', args.id);
+  const [prefix, anilistId, episode] = args.id.split(':');
+  if (prefix !== 'nyaa') return { streams: [] };
+
+  const schedule = todayAnimeCache.find(s => s.media.id === parseInt(anilistId) && s.episode === parseInt(episode));
+  if (!schedule) return { streams: [] };
+
+  const m = schedule.media;
+  let torrents = await searchNyaa(m.title.romaji || m.title.english, parseInt(episode));
   
-  const idParts = args.id.split(':');
-  
-  if (idParts[0] !== 'nyaa' || idParts.length !== 3) {
-    return { streams: [] };
+  if (!torrents.length && m.title.english !== m.title.romaji) {
+    torrents = await searchNyaa(m.title.english || m.title.romaji, parseInt(episode));
   }
 
-  const anilistId = parseInt(idParts[1]);
-  const episode = parseInt(idParts[2]);
+  if (!torrents.length) return { streams: [] };
 
-  const schedule = todayAnimeCache.find(s => 
-    s.media.id === anilistId && s.episode === episode
-  );
+  const rdKey = args.config?.rd || REALDEBRID_API_KEY;
+  const baseUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
 
-  if (!schedule) {
-    return { streams: [] };
-  }
-
-  const media = schedule.media;
-  const animeName = media.title.romaji || media.title.english || media.title.native;
-  const animeNameEn = media.title.english || media.title.romaji || media.title.native;
-  
-  let torrents = await searchNyaa(animeName, episode);
-  
-  if (torrents.length === 0 && animeNameEn !== animeName) {
-    torrents = await searchNyaa(animeNameEn, episode);
-  }
-
-  if (torrents.length === 0) {
-    return { streams: [] };
-  }
-
-  const streams = [];
-  const userRdKey = args.config?.rd || REALDEBRID_API_KEY;
-
-  for (const torrent of torrents) {
-    if (!torrent.magnet) continue;
-
-    if (userRdKey) {
-      streams.push({
+  return {
+    streams: torrents.filter(t => t.magnet).map(t => 
+      rdKey ? {
         name: 'Nyaa + RealDebrid',
-        title: `🎬 ${torrent.name}\n👥 ${torrent.seeders} seeders | 📦 ${torrent.filesize}`,
-        externalUrl: `${process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`}/rd/${encodeURIComponent(torrent.magnet)}?key=${encodeURIComponent(userRdKey)}`
-      });
-    } else {
-      streams.push({
+        title: `🎬 ${t.name}\n👥 ${t.seeders} | 📦 ${t.filesize}`,
+        externalUrl: `${baseUrl}/rd/${encodeURIComponent(t.magnet)}?key=${encodeURIComponent(rdKey)}`
+      } : {
         name: 'Nyaa (Magnet)',
-        title: `${torrent.name}\n👥 ${torrent.seeders} seeders | 📦 ${torrent.filesize}`,
-        url: torrent.magnet,
-        behaviorHints: {
-          notWebReady: true
-        }
-      });
-    }
-  }
-
-  console.log(`Returning ${streams.length} streams`);
-  return { streams };
+        title: `${t.name}\n👥 ${t.seeders} | 📦 ${t.filesize}`,
+        url: t.magnet,
+        behaviorHints: { notWebReady: true }
+      }
+    )
+  };
 });
 
-// Express server pro custom routes
+// ===== Express Server =====
 const app = express();
 
-// Servovat static soubory
+// Static files
 app.use(express.static(path.join(__dirname, 'public')));
 
 // RealDebrid callback
-app.get('/rd/:magnetUrl', async (req, res) => {
-  const magnetUrl = decodeURIComponent(req.params.magnetUrl);
+app.get('/rd/:magnet', async (req, res) => {
   const apiKey = req.query.key || REALDEBRID_API_KEY;
+  if (!apiKey) return res.status(400).send('API key required');
   
-  if (!apiKey) {
-    return res.status(400).send('RealDebrid API key required');
-  }
-  
-  const streamUrl = await getRealDebridStream(magnetUrl, apiKey);
-  
-  if (streamUrl) {
-    res.redirect(streamUrl);
-  } else {
-    res.status(500).send('RealDebrid failed');
-  }
+  const stream = await getRealDebridStream(decodeURIComponent(req.params.magnet), apiKey);
+  stream ? res.redirect(stream) : res.status(500).send('Failed');
 });
 
-// Použít serveHTTP s naším Express serverem
+// Start server
 serveHTTP(builder.getInterface(), { port: PORT, server: app });
 
-// Přepsat root route AŽ PO serveHTTP
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
-console.log(`🚀 Anime Today + Nyaa běží na portu ${PORT}`);
-console.log(`📺 Manifest: http://localhost:${PORT}/manifest.json`);
-console.log(`🌐 Web: http://localhost:${PORT}/`);
-console.log(`🔑 RealDebrid: ${REALDEBRID_API_KEY ? '✅ Aktivní' : '❌ Neaktivní'}`);
+console.log(`🚀 Server running on port ${PORT}`);
+console.log(`📺 Addon: http://localhost:${PORT}/manifest.json`);
+console.log(`🌐 Setup: http://localhost:${PORT}/`);
