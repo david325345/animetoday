@@ -265,8 +265,13 @@ app.get('/rd/:magnet', async (req, res) => {
 });
 
 // Start server
-serveHTTP(builder.getInterface(), { port: PORT, server: app });
+const addonInterface = builder.getInterface();
 
-console.log(`🚀 Server running on port ${PORT}`);
-console.log(`📺 Addon: http://localhost:${PORT}/manifest.json`);
-console.log(`🌐 Setup: http://localhost:${PORT}/`);
+// Mount addon routes manually (without SDK landing page)
+app.use(addonInterface);
+
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`📺 Addon: http://localhost:${PORT}/manifest.json`);
+  console.log(`🌐 Setup: http://localhost:${PORT}/`);
+});
