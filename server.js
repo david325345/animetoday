@@ -406,35 +406,53 @@ const addonInterface = builder.getInterface();
 
 app.get('/manifest.json', (req, res) => {
   res.setHeader('Content-Type', 'application/json');
-  res.send(addonInterface.manifest);
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  
+  // Pokud je v query rd klíč, přidat ho do manifestu jako config
+  const manifestCopy = { ...addonInterface.manifest };
+  
+  if (req.query.rd) {
+    manifestCopy.behaviorHints = {
+      configurable: true,
+      configurationRequired: false
+    };
+  }
+  
+  res.send(manifestCopy);
 });
 
 app.get('/catalog/:type/:id.json', async (req, res) => {
   res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Access-Control-Allow-Origin', '*');
   try {
     const result = await addonInterface[`/catalog/${req.params.type}/${req.params.id}.json`]({ query: req.query });
     res.send(result);
   } catch (err) {
+    console.error('Catalog error:', err);
     res.status(500).send({ metas: [] });
   }
 });
 
 app.get('/meta/:type/:id.json', async (req, res) => {
   res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Access-Control-Allow-Origin', '*');
   try {
     const result = await addonInterface[`/meta/${req.params.type}/${req.params.id}.json`]({ query: req.query });
     res.send(result);
   } catch (err) {
+    console.error('Meta error:', err);
     res.status(500).send({ meta: null });
   }
 });
 
 app.get('/stream/:type/:id.json', async (req, res) => {
   res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Access-Control-Allow-Origin', '*');
   try {
     const result = await addonInterface[`/stream/${req.params.type}/${req.params.id}.json`]({ query: req.query });
     res.send(result);
   } catch (err) {
+    console.error('Stream error:', err);
     res.status(500).send({ streams: [] });
   }
 });
