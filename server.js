@@ -13,7 +13,7 @@ let todayAnimeCache = [];
 
 const manifest = {
   id: 'cz.anime.nyaa.rd',
-  version: '1.1.0',
+  version: '1.2.0',
   name: 'Anime Today + Nyaa + RealDebrid',
   description: 'Dnešní anime epizody z AniList s torrenty z Nyaa.si',
   resources: ['catalog', 'meta', 'stream'],
@@ -26,7 +26,7 @@ const manifest = {
   }],
   idPrefixes: ['nyaa:'],
   behaviorHints: {
-    configurable: false,
+    configurable: true,
     configurationRequired: false
   }
 };
@@ -287,12 +287,20 @@ updateCache();
 builder.defineCatalogHandler(async (args) => {
   if (args.type !== 'series' || args.id !== 'anime-today') return { metas: [] };
   if (parseInt(args.extra?.skip) > 0) return { metas: [] };
+  
+  // Získat user TMDB klíč z config pokud existuje
+  let userTmdbKey = TMDB_API_KEY;
+  if (args.config?.config) {
+    try {
+      const config = JSON.parse(Buffer.from(args.config.config, 'base64').toString());
+      if (config.tmdb) userTmdbKey = config.tmdb;
+    } catch (err) {}
+  }
 
   return {
     metas: todayAnimeCache.map(s => {
-      // Zajistit že poster je vždy validní URL
+      // Validace posteru
       let poster = s.tmdbImages?.poster || s.media.coverImage.extraLarge || s.media.coverImage.large;
-      // Fallback placeholder pokud všechno selže
       if (!poster || poster === 'null' || poster === '') {
         poster = 'https://via.placeholder.com/230x345/1a1a2e/ffffff?text=No+Image';
       }
@@ -374,7 +382,17 @@ builder.defineStreamHandler(async (args) => {
 
   if (!torrents.length) return { streams: [] };
 
-  const rdKey = REALDEBRID_API_KEY;
+  // Dekódovat user config pro RD klíč
+  let rdKey = REALDEBRID_API_KEY;
+  if (args.config?.config) {
+    try {
+      const config = JSON.parse(Buffer.from(args.config.config, 'base64').toString());
+      if (config.rd) rdKey = config.rd;
+    } catch (err) {
+      console.error('Config decode error:', err.message);
+    }
+  }
+  
   const baseUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
 
   return {
@@ -401,6 +419,27 @@ builder.defineStreamHandler(async (args) => {
 
 // ===== Express Server =====
 const app = express();
+
+// Custom manifest s user keys
+app.get('/manifest.json', (req, res, next) => {
+  // Pokud je config v query, dekódovat a vytvořit custom manifest
+  if (req.query.config) {
+    try {
+      const config = JSON.parse(Buffer.from(req.query.config, 'base64').toString());
+      const customManifest = { ...manifest };
+      
+      // Unikátní ID pro každou konfiguraci
+      const configHash = req.query.config.substring(0, 10);
+      customManifest.id = `${manifest.id}.${configHash}`;
+      customManifest.name = 'Anime Today (Your Config)';
+      
+      return res.json(customManifest);
+    } catch (err) {
+      console.error('Config decode error:', err.message);
+    }
+  }
+  next();
+});
 
 app.get('/', (req, res, next) => {
   if (req.headers.accept && req.headers.accept.includes('text/html')) {
