@@ -375,17 +375,10 @@ builder.defineStreamHandler(async (args) => {
   return { streams };
 });
 
-// Endpoint pro RealDebrid zpracování (volá se při kliknutí)
+// RealDebrid callback endpoint
 const express = require('express');
 const app = express();
 
-// Stremio addon routes
-const addonInterface = builder.getInterface();
-for (const resource in addonInterface) {
-  app.get(resource, addonInterface[resource]);
-}
-
-// RealDebrid callback endpoint
 app.get('/rd/:torrentUrl', async (req, res) => {
   const torrentUrl = decodeURIComponent(req.params.torrentUrl);
   console.log(`RD callback: ${torrentUrl}`);
@@ -393,15 +386,15 @@ app.get('/rd/:torrentUrl', async (req, res) => {
   const streamUrl = await getRealDebridStream(torrentUrl);
   
   if (streamUrl) {
-    // Přesměrovat na direct stream
     res.redirect(streamUrl);
   } else {
     res.status(500).send('RealDebrid failed');
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 Anime Today + Nyaa běží na portu ${PORT}`);
-  console.log(`📺 Manifest: http://localhost:${PORT}/manifest.json`);
-  console.log(`🔑 RealDebrid: ${REALDEBRID_API_KEY ? '✅ Aktivní' : '❌ Neaktivní'}`);
-});
+// Spustit Stremio addon na stejném portu
+serveHTTP(builder.getInterface(), { port: PORT, server: app });
+
+console.log(`🚀 Anime Today + Nyaa běží na portu ${PORT}`);
+console.log(`📺 Manifest: http://localhost:${PORT}/manifest.json`);
+console.log(`🔑 RealDebrid: ${REALDEBRID_API_KEY ? '✅ Aktivní' : '❌ Neaktivní'}`);
