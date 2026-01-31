@@ -31,18 +31,6 @@ const manifest = {
   }
 };
 
-// Funkce pro dekódování config z URL
-function decodeConfig(req) {
-  const urlPath = req.path || req.url;
-  const match = urlPath.match(/^\/([A-Za-z0-9+/=]+)\//);
-  if (match) {
-    try {
-      return JSON.parse(Buffer.from(match[1], 'base64').toString());
-    } catch (e) {}
-  }
-  return {};
-}
-
 const builder = new addonBuilder(manifest);
 
 // ===== TMDB API =====
@@ -355,11 +343,13 @@ builder.defineStreamHandler(async (args) => {
 // ===== Express Server =====
 const app = express();
 
-// Middleware pro dekódování config z URL
+// CORS middleware
 app.use((req, res, next) => {
-  const config = decodeConfig(req);
-  if (config.rd) {
-    req.userConfig = config;
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
   }
   next();
 });
