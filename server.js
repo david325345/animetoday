@@ -72,52 +72,58 @@ async function getTodayAnime() {
 }
 
 async function searchNyaa(animeName, episode) {
-  try {
-    const cleanName = animeName
-      .replace(/Season \d+/i, '')
-      .replace(/Part \d+/i, '')
-      .replace(/2nd Season/i, '')
-      .replace(/\s+/g, ' ')
-      .trim();
-    
-    const searchQuery = `${cleanName} ${episode}`.trim();
-    const rssUrl = `https://nyaa.si/?page=rss&q=${encodeURIComponent(searchQuery)}&c=1_2&f=0`;
-    
-    console.log(`Nyaa search: "${searchQuery}"`);
-    
-    const response = await axios.get(rssUrl, {
-      timeout: 10000,
-      headers: { 'User-Agent': 'Stremio-Anime-Addon/3.0' }
-    });
+  // Zkusíme několik variant vyhledávání
+  const searchVariants = [
+    `${animeName} ${episode}`, // Plný název
+    `${animeName.split(':')[0].trim()} ${episode}`, // Bez podtitulu (před :)
+    `${animeName.replace(/Season \d+/i, '').replace(/Part \d+/i, '').replace(/2nd Season/i, '').trim()} ${episode}` // Vyčištěný
+  ];
 
-    const parser = new xml2js.Parser();
-    const result = await parser.parseStringPromise(response.data);
-
-    if (!result.rss?.channel?.[0]?.item) {
-      console.log('No items in RSS');
-      return [];
-    }
-
-    const torrents = result.rss.channel[0].item.map(item => {
-      const link = item.link?.[0] || '';
-      const nyaaId = link.match(/\/view\/(\d+)/)?.[1];
+  for (const searchQuery of searchVariants) {
+    try {
+      const rssUrl = `https://nyaa.si/?page=rss&q=${encodeURIComponent(searchQuery)}&c=1_2&f=0`;
       
-      return {
-        title: item.title?.[0] || '',
-        nyaaId: nyaaId,
-        torrentUrl: nyaaId ? `https://nyaa.si/download/${nyaaId}.torrent` : null,
-        size: item['nyaa:size']?.[0] || 'Unknown',
-        seeders: parseInt(item['nyaa:seeders']?.[0] || 0)
-      };
-    });
+      console.log(`Nyaa trying: "${searchQuery}"`);
+      
+      const response = await axios.get(rssUrl, {
+        timeout: 10000,
+        headers: { 'User-Agent': 'Stremio-Anime-Addon/3.0' }
+      });
 
-    const valid = torrents.filter(t => t.torrentUrl).sort((a, b) => b.seeders - a.seeders);
-    console.log(`Found ${valid.length} torrents`);
-    return valid;
-  } catch (error) {
-    console.error('Nyaa error:', error.message);
-    return [];
+      const parser = new xml2js.Parser();
+      const result = await parser.parseStringPromise(response.data);
+
+      if (!result.rss?.channel?.[0]?.item) {
+        console.log(`No items for "${searchQuery}"`);
+        continue;
+      }
+
+      const torrents = result.rss.channel[0].item.map(item => {
+        const link = item.link?.[0] || '';
+        const nyaaId = link.match(/\/view\/(\d+)/)?.[1];
+        
+        return {
+          title: item.title?.[0] || '',
+          nyaaId: nyaaId,
+          torrentUrl: nyaaId ? `https://nyaa.si/download/${nyaaId}.torrent` : null,
+          size: item['nyaa:size']?.[0] || 'Unknown',
+          seeders: parseInt(item['nyaa:seeders']?.[0] || 0)
+        };
+      });
+
+      const valid = torrents.filter(t => t.torrentUrl).sort((a, b) => b.seeders - a.seeders);
+      
+      if (valid.length > 0) {
+        console.log(`✅ Found ${valid.length} torrents with "${searchQuery}"`);
+        return valid;
+      }
+    } catch (error) {
+      console.error(`Error for "${searchQuery}":`, error.message);
+    }
   }
+
+  console.log('No torrents found with any variant');
+  return [];
 }
 
 async function getRealDebridStream(torrentUrl) {
@@ -335,10 +341,20 @@ builder.defineStreamHandler(async (args) => {
     return { streams: [] };
   }
 
-  const animeName = schedule.media.title.romaji || schedule.media.title.english;
+  const media = schedule.media;
+  const animeName = media.title.romaji || media.title.english || media.title.native;
+  const animeNameEn = media.title.english || media.title.romaji || media.title.native;
   
-  // 1. Najít torrenty na Nyaa (rychle, bez stahování)
-  const torrents = await searchNyaa(animeName, episode);
+  console.log(`Searching for: ${animeName} (EN: ${animeNameEn})`);
+  
+  // 1. Najít torrenty - zkusit romaji i english
+  let torrents = await searchNyaa(animeName, episode);
+  
+  // Pokud nic nenajde, zkusit anglický název
+  if (torrents.length === 0 && animeNameEn !== animeName) {
+    console.log('Trying English name...');
+    torrents = await searchNyaa(animeNameEn, episode);
+  }
 
   if (torrents.length === 0) {
     console.log('No torrents found');
