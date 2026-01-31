@@ -24,7 +24,11 @@ const manifest = {
       name: 'Dnešní Anime (Nyaa)'
     }
   ],
-  idPrefixes: ['nyaa:']
+  idPrefixes: ['nyaa:'],
+  behaviorHints: {
+    configurable: true,
+    configurationRequired: false
+  }
 };
 
 const builder = new addonBuilder(manifest);
@@ -220,7 +224,12 @@ async function updateCache() {
 updateCache();
 cron.schedule('*/15 * * * *', updateCache);
 
-builder.defineCatalogHandler(async (args) => {
+// Počkat na inicializaci builderu
+async function startServer() {
+  // Počkat chvíli na builder inicializaci
+  await new Promise(resolve => setTimeout(resolve, 1000));
+  
+  builder.defineCatalogHandler(async (args) => {
   if (args.type === 'series' && args.id === 'anime-today-nyaa') {
     const skip = parseInt(args.extra?.skip) || 0;
     
@@ -407,18 +416,7 @@ const addonInterface = builder.getInterface();
 app.get('/manifest.json', (req, res) => {
   res.setHeader('Content-Type', 'application/json');
   res.setHeader('Access-Control-Allow-Origin', '*');
-  
-  // Pokud je v query rd klíč, přidat ho do manifestu jako config
-  const manifestCopy = { ...addonInterface.manifest };
-  
-  if (req.query.rd) {
-    manifestCopy.behaviorHints = {
-      configurable: true,
-      configurationRequired: false
-    };
-  }
-  
-  res.send(manifestCopy);
+  res.send(manifest);
 });
 
 app.get('/catalog/:type/:id.json', async (req, res) => {
@@ -489,4 +487,11 @@ app.listen(PORT, () => {
   console.log(`📺 Manifest: http://localhost:${PORT}/manifest.json`);
   console.log(`🌐 Web: http://localhost:${PORT}/`);
   console.log(`🔑 RealDebrid: ${REALDEBRID_API_KEY ? '✅ Aktivní' : '❌ Neaktivní'}`);
+});
+}
+
+// Spustit server
+startServer().catch(err => {
+  console.error('Server start error:', err);
+  process.exit(1);
 });
