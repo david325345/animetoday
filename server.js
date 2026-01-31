@@ -246,13 +246,16 @@ builder.defineMetaHandler(async (args) => {
   if (!schedule) return { meta: null };
 
   const m = schedule.media;
+  const poster = m.coverImage.extraLarge || m.coverImage.large;
+  const background = m.bannerImage || poster; // Fallback na poster pokud banner chybí
+  
   return {
     meta: {
       id: args.id,
       type: 'series',
       name: m.title.romaji || m.title.english || m.title.native,
-      poster: m.coverImage.extraLarge || m.coverImage.large,
-      background: m.bannerImage,
+      poster: poster,
+      background: background,
       logo: m.bannerImage,
       description: (m.description || '').replace(/<[^>]*>/g, ''),
       genres: m.genres || [],
@@ -264,7 +267,7 @@ builder.defineMetaHandler(async (args) => {
         episode: schedule.episode,
         season: 1,
         released: new Date(schedule.airingAt * 1000).toISOString(),
-        thumbnail: m.coverImage.extraLarge || m.coverImage.large
+        thumbnail: poster
       }]
     }
   };
