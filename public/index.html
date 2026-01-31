@@ -94,6 +94,14 @@
             transform: translateY(-2px);
             box-shadow: 0 12px 24px rgba(102, 126, 234, 0.3);
         }
+        .btn-secondary {
+            background: #10b981;
+            color: white;
+            margin-top: 12px;
+        }
+        .btn-secondary:hover {
+            background: #059669;
+        }
         .help {
             font-size: 13px;
             color: #6b7280;
@@ -117,6 +125,11 @@
             color: #991b1b;
             border: 1px solid #ef4444;
         }
+        .status-success {
+            background: #d1fae5;
+            color: #065f46;
+            border: 1px solid #10b981;
+        }
         .info-box {
             background: #f3f4f6;
             border-radius: 12px;
@@ -133,6 +146,29 @@
             font-size: 13px;
             color: #6b7280;
             line-height: 1.6;
+        }
+        .url-box {
+            background: white;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 12px;
+            font-family: monospace;
+            font-size: 12px;
+            word-break: break-all;
+            margin: 12px 0;
+        }
+        #urlSection {
+            display: none;
+            margin-top: 20px;
+        }
+        .instructions {
+            background: #fef3c7;
+            border: 1px solid #f59e0b;
+            color: #92400e;
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 13px;
+            margin-top: 12px;
         }
     </style>
 </head>
@@ -158,9 +194,22 @@
             </div>
         </div>
         
-        <a href="#" id="installBtn" class="btn btn-primary" onclick="install(event)">
-            🚀 Instalovat do Stremio
-        </a>
+        <button class="btn btn-primary" onclick="generateUrl()">
+            🔧 Vygenerovat Instalační URL
+        </button>
+        
+        <div id="urlSection">
+            <div class="url-box" id="addonUrl"></div>
+            <button class="btn btn-secondary" onclick="copyUrl()">
+                📋 Zkopírovat URL
+            </button>
+            <div class="instructions">
+                <strong>📌 Jak nainstalovat:</strong><br>
+                1. Zkopírujte URL tlačítkem výše<br>
+                2. Otevřete Stremio<br>
+                3. Vložte URL do Addons → Install from URL
+            </div>
+        </div>
         
         <div id="status"></div>
         
@@ -174,8 +223,9 @@
     </div>
 
     <script>
-        function install(e) {
-            e.preventDefault();
+        let manifestUrl = '';
+        
+        function generateUrl() {
             const rd = document.getElementById('rdKey').value.trim();
             const tmdb = document.getElementById('tmdbKey').value.trim();
             
@@ -184,14 +234,29 @@
                 return;
             }
             
-            // Použít query parametr místo path (bezpečnější pro base64)
             const configObj = { rd: rd };
             if (tmdb) configObj.tmdb = tmdb;
             
             const config = btoa(JSON.stringify(configObj));
-            const url = `${window.location.origin}/manifest.json?c=${encodeURIComponent(config)}`;
+            manifestUrl = `${window.location.origin}/manifest.json?c=${encodeURIComponent(config)}`;
             
-            window.location.href = url;
+            document.getElementById('addonUrl').textContent = manifestUrl;
+            document.getElementById('urlSection').style.display = 'block';
+            document.getElementById('status').innerHTML = '<div class="status status-success">✅ URL vygenerována! Zkopírujte a vložte do Stremio.</div>';
+            
+            // Scroll to url section
+            document.getElementById('urlSection').scrollIntoView({ behavior: 'smooth' });
+        }
+        
+        function copyUrl() {
+            navigator.clipboard.writeText(manifestUrl).then(() => {
+                const btn = event.target;
+                const originalText = btn.textContent;
+                btn.textContent = '✓ Zkopírováno!';
+                setTimeout(() => btn.textContent = originalText, 2000);
+            }).catch(() => {
+                alert('URL: ' + manifestUrl);
+            });
         }
     </script>
 </body>
