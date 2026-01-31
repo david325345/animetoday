@@ -185,12 +185,19 @@
                 return;
             }
             
-            const config = btoa(JSON.stringify({ 
-                rd: rd,
-                tmdb: tmdb || undefined
-            }));
+            // Vytvořit config objekt - VŽDY včetně tmdb (i když prázdný)
+            const configObj = { rd: rd };
+            if (tmdb) {
+                configObj.tmdb = tmdb;
+            }
             
+            const config = btoa(JSON.stringify(configObj));
             const url = `${window.location.origin}/${config}/manifest.json`;
+            
+            console.log('Config:', configObj);
+            console.log('Base64:', config);
+            console.log('URL:', url);
+            
             window.location.href = url;
         }
     </script>
