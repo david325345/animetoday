@@ -243,6 +243,15 @@ builder.defineStreamHandler(async (args) => {
 // ===== Express Server =====
 const app = express();
 
+// Redirect root to index.html (must be BEFORE static middleware)
+app.get('/', (req, res, next) => {
+  // Only redirect if accept header suggests browser (not Stremio API call)
+  if (req.headers.accept && req.headers.accept.includes('text/html')) {
+    return res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  }
+  next(); // Let SDK handle API calls to /
+});
+
 // Static files
 app.use(express.static(path.join(__dirname, 'public')));
 
