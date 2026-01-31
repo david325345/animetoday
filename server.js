@@ -2,6 +2,7 @@ const { addonBuilder, serveHTTP } = require('stremio-addon-sdk');
 const axios = require('axios');
 const cron = require('node-cron');
 const express = require('express');
+const path = require('path');
 const { si } = require('nyaapi');
 
 const PORT = process.env.PORT || 7000;
@@ -367,8 +368,8 @@ builder.defineStreamHandler(async (args) => {
 
 const app = express();
 
-// Servovat statické soubory z public složky
-app.use(express.static('public'));
+// Servovat statické soubory z public složky (absolutní cesta)
+app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/rd/:magnetUrl', async (req, res) => {
   const magnetUrl = decodeURIComponent(req.params.magnetUrl);
