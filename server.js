@@ -4,6 +4,7 @@ const cron = require('node-cron');
 const express = require('express');
 const path = require('path');
 const { si } = require('nyaapi');
+const crypto = require('crypto');
 
 const PORT = process.env.PORT || 7000;
 const TMDB_API_KEY = process.env.TMDB_API_KEY || '';
@@ -382,25 +383,33 @@ app.get('/rd/:magnet', async (req, res) => {
   stream ? res.redirect(stream) : res.status(500).send('Failed');
 });
 
-// Custom manifest handler pro config v PATH
-app.get('/:config/manifest.json', (req, res) => {
-  try {
-    const config = JSON.parse(Buffer.from(req.params.config, 'base64').toString());
-    const customManifest = { ...manifest };
-    customManifest.id = `${manifest.id}.${req.params.config.substring(0, 8)}`;
-    customManifest.name = 'Anime Today (Personal)';
-    res.json(customManifest);
-  } catch (err) {
-    res.status(400).json({ error: 'Invalid config' });
-  }
-});
-
-// Addon router z SDK (bez serveHTTP)
+// Získat addon interface
 const addonInterface = builder.getInterface();
 
-app.get('/:config/catalog/:type/:id.json', async (req, res) => {
+// Custom manifest handler pro config v query parametru
+app.get('/manifest.json', (req, res) => {
+  if (req.query.c) {
+    try {
+      const config = JSON.parse(Buffer.from(decodeURIComponent(req.query.c), 'base64').toString());
+      const customManifest = { ...manifest };
+      const hash = require('crypto').createHash('md5').update(JSON.stringify(config)).digest('hex').substring(0, 8);
+      customManifest.id = `${manifest.id}.${hash}`;
+      customManifest.name = 'Anime Today (Personal)';
+      console.log('Custom manifest with config:', config.rd ? 'RD+' : '', config.tmdb ? 'TMDB' : '');
+      res.json(customManifest);
+      return;
+    } catch (err) {
+      console.error('Config decode error:', err.message);
+    }
+  }
+  // Default manifest
+  res.json(manifest);
+});
+
+// Addon routes s config
+app.get('/catalog/:type/:id.json', async (req, res) => {
   try {
-    const config = JSON.parse(Buffer.from(req.params.config, 'base64').toString());
+    const config = req.query.c ? JSON.parse(Buffer.from(decodeURIComponent(req.query.c), 'base64').toString()) : {};
     const result = await addonInterface.catalog({ type: req.params.type, id: req.params.id, extra: req.query, config });
     res.json(result);
   } catch (err) {
@@ -408,9 +417,9 @@ app.get('/:config/catalog/:type/:id.json', async (req, res) => {
   }
 });
 
-app.get('/:config/meta/:type/:id.json', async (req, res) => {
+app.get('/meta/:type/:id.json', async (req, res) => {
   try {
-    const config = JSON.parse(Buffer.from(req.params.config, 'base64').toString());
+    const config = req.query.c ? JSON.parse(Buffer.from(decodeURIComponent(req.query.c), 'base64').toString()) : {};
     const result = await addonInterface.meta({ type: req.params.type, id: req.params.id, config });
     res.json(result);
   } catch (err) {
@@ -418,9 +427,9 @@ app.get('/:config/meta/:type/:id.json', async (req, res) => {
   }
 });
 
-app.get('/:config/stream/:type/:id.json', async (req, res) => {
+app.get('/stream/:type/:id.json', async (req, res) => {
   try {
-    const config = JSON.parse(Buffer.from(req.params.config, 'base64').toString());
+    const config = req.query.c ? JSON.parse(Buffer.from(decodeURIComponent(req.query.c), 'base64').toString()) : {};
     const result = await addonInterface.stream({ type: req.params.type, id: req.params.id, config });
     res.json(result);
   } catch (err) {
