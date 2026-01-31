@@ -371,6 +371,11 @@ const app = express();
 // Servovat statické soubory z public složky (absolutní cesta)
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Explicitní route pro root (přepíše SDK landing page)
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
 app.get('/rd/:magnetUrl', async (req, res) => {
   const magnetUrl = decodeURIComponent(req.params.magnetUrl);
   const apiKey = req.query.key || REALDEBRID_API_KEY;
