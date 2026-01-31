@@ -368,6 +368,11 @@ app.use((req, res, next) => {
   next();
 });
 
+// ROOT route - naše landing page (PŘED static middleware)
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/rd/:magnet', async (req, res) => {
@@ -377,6 +382,12 @@ app.get('/rd/:magnet', async (req, res) => {
   stream ? res.redirect(stream) : res.status(500).send('Failed');
 });
 
+// Nejdřív SDK routes
 serveHTTP(builder.getInterface(), { port: PORT, server: app });
+
+// Pak override root route pro naši landing page
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
 
 console.log(`🚀 Server: http://localhost:${PORT}/`);
