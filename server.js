@@ -83,15 +83,29 @@ async function searchNyaa(animeName, episode) {
     try {
       console.log(`Nyaa API: "${query}"`);
       
-      // si.searchAll() vrací všechny výsledky místo jen první stránky
-      const result = await si.searchAll(query, {
-        filter: 0,
-        category: '1_2' // Anime - English-translated
-      });
+      // Zkusit první 2 stránky (2x75 = 150 torrentů max)
+      let allTorrents = [];
+      
+      for (let page = 1; page <= 2; page++) {
+        try {
+          const result = await si.searchPage(query, page, {
+            filter: 0,
+            category: '1_2'
+          });
+          
+          if (result && result.length > 0) {
+            allTorrents = allTorrents.concat(result);
+          } else {
+            break; // Žádné další výsledky
+          }
+        } catch (err) {
+          console.error(`Page ${page} failed:`, err.message);
+          break;
+        }
+      }
 
-      if (result && result.length > 0) {
-        // Seřadit podle seeders
-        const sorted = result.sort((a, b) => b.seeders - a.seeders);
+      if (allTorrents.length > 0) {
+        const sorted = allTorrents.sort((a, b) => b.seeders - a.seeders);
         console.log(`✅ Found ${sorted.length} torrents`);
         return sorted;
       }
