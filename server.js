@@ -12,7 +12,7 @@ const manifest = {
   version: '3.0.0',
   name: 'Anime Today + Nyaa',
   description: 'Dnešní anime s přímými streamy z Nyaa',
-  resources: ['catalog', 'stream'],
+  resources: ['catalog', 'meta', 'stream'],
   types: ['series'],
   catalogs: [
     {
@@ -175,6 +175,54 @@ builder.defineCatalogHandler(async (args) => {
   }
 
   return { metas: [] };
+});
+
+// META - vrátí detail anime
+builder.defineMetaHandler(async (args) => {
+  console.log('Meta request:', args.id);
+  
+  const idParts = args.id.split(':');
+  
+  if (idParts[0] !== 'nyaa' || idParts.length !== 3) {
+    return { meta: null };
+  }
+
+  const anilistId = parseInt(idParts[1]);
+  const episode = parseInt(idParts[2]);
+
+  // Najít anime v cache
+  const schedule = todayAnimeCache.find(s => 
+    s.media.id === anilistId && s.episode === episode
+  );
+
+  if (!schedule) {
+    return { meta: null };
+  }
+
+  const media = schedule.media;
+
+  return {
+    meta: {
+      id: args.id,
+      type: 'series',
+      name: media.title.romaji || media.title.english || media.title.native,
+      poster: media.coverImage.large,
+      background: media.bannerImage,
+      description: media.description ? media.description.replace(/<[^>]*>/g, '') : '',
+      genres: media.genres || [],
+      releaseInfo: `${media.season || ''} ${media.seasonYear || ''} - Epizoda ${schedule.episode}`.trim(),
+      imdbRating: media.averageScore ? (media.averageScore / 10).toFixed(1).toString() : undefined,
+      videos: [
+        {
+          id: args.id,
+          title: `Epizoda ${schedule.episode}`,
+          episode: schedule.episode,
+          season: 1,
+          released: new Date(schedule.airingAt * 1000).toISOString()
+        }
+      ]
+    }
+  };
 });
 
 // STREAM - najde torrenty na Nyaa
