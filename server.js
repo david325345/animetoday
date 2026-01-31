@@ -9,19 +9,19 @@ let lastUpdate = null;
 
 const manifest = {
   id: 'cz.anime.anilist.catalog',
-  version: '1.0.3',
+  version: '1.0.4',
   name: 'Anime Today Catalog',
   description: 'Katalog dnešních anime epizod z AniList',
   resources: ['catalog'],
-  types: ['movie'],
+  types: ['series'],
   catalogs: [
     {
-      type: 'movie',
+      type: 'series',
       id: 'anime-today',
       name: 'Dnešní Anime Epizody'
     }
   ],
-  idPrefixes: ['anilist:', 'kitsu:', 'mal:']
+  idPrefixes: ['anilist:']
 };
 
 const builder = new addonBuilder(manifest);
@@ -87,7 +87,7 @@ updateCache();
 cron.schedule('*/15 * * * *', updateCache);
 
 builder.defineCatalogHandler(async (args) => {
-  if (args.type === 'movie' && args.id === 'anime-today') {
+  if (args.type === 'series' && args.id === 'anime-today') {
     const skip = parseInt(args.extra?.skip) || 0;
     
     if (skip > 0) {
@@ -98,28 +98,28 @@ builder.defineCatalogHandler(async (args) => {
     const metas = todayAnimeCache.map(schedule => {
       const media = schedule.media;
       
-      // Najít Kitsu link pokud existuje (Stremio ho rozpozná lépe)
-      const kitsuLink = media.externalLinks?.find(link => link.site === 'Kitsu');
-      let id = `anilist:${media.id}`;
-      
-      if (kitsuLink) {
-        const kitsuId = kitsuLink.url.split('/').pop();
-        id = `kitsu:${kitsuId}`;
-      } else if (media.idMal) {
-        id = `mal:${media.idMal}`;
-      }
+      // Vytvoříme unikátní ID pro tuto konkrétní epizodu tohoto anime
+      const uniqueId = `anilist:${media.id}:ep${schedule.episode}`;
       
       return {
-        id: id,
-        type: 'movie',
-        name: `${media.title.romaji || media.title.english || media.title.native} - Epizoda ${schedule.episode}`,
+        id: uniqueId,
+        type: 'series',
+        name: media.title.romaji || media.title.english || media.title.native,
         poster: media.coverImage.large,
         background: media.bannerImage,
-        description: `Epizoda ${schedule.episode}\n\n${media.description ? media.description.replace(/<[^>]*>/g, '') : 'Bez popisu'}`,
+        description: `${media.description ? media.description.replace(/<[^>]*>/g, '') : 'Bez popisu'}`,
         genres: media.genres || [],
-        releaseInfo: media.seasonYear ? `${media.season} ${media.seasonYear}` : '',
+        releaseInfo: `${media.seasonYear ? `${media.season} ${media.seasonYear}` : ''} - Epizoda ${schedule.episode}`,
         imdbRating: media.averageScore ? (media.averageScore / 10).toFixed(1) : undefined,
-        runtime: `Episode ${schedule.episode}`
+        videos: [
+          {
+            id: uniqueId,
+            title: `Epizoda ${schedule.episode}`,
+            episode: schedule.episode,
+            season: 1,
+            released: new Date(schedule.airingAt * 1000).toISOString()
+          }
+        ]
       };
     });
 
