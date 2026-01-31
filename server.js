@@ -356,11 +356,6 @@ builder.defineStreamHandler(async (args) => {
 // Express server pro custom routes
 const app = express();
 
-// Naše landing page na root
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
 // Servovat static soubory
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -384,6 +379,11 @@ app.get('/rd/:magnetUrl', async (req, res) => {
 
 // Použít serveHTTP s naším Express serverem
 serveHTTP(builder.getInterface(), { port: PORT, server: app });
+
+// Přepsat root route AŽ PO serveHTTP
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
 
 console.log(`🚀 Anime Today + Nyaa běží na portu ${PORT}`);
 console.log(`📺 Manifest: http://localhost:${PORT}/manifest.json`);
