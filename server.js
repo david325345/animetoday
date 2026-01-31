@@ -223,20 +223,29 @@ builder.defineStreamHandler(async (args) => {
 
   const rdKey = args.config?.rd || REALDEBRID_API_KEY;
   const baseUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+  
+  console.log('Creating streams with RD key:', rdKey ? 'yes' : 'no');
+  console.log('Base URL:', baseUrl);
 
   return {
-    streams: torrents.filter(t => t.magnet).map(t => 
-      rdKey ? {
-        name: 'Nyaa + RealDebrid',
-        title: `🎬 ${t.name}\n👥 ${t.seeders} | 📦 ${t.filesize}`,
-        externalUrl: `${baseUrl}/rd/${encodeURIComponent(t.magnet)}?key=${encodeURIComponent(rdKey)}`
-      } : {
-        name: 'Nyaa (Magnet)',
-        title: `${t.name}\n👥 ${t.seeders} | 📦 ${t.filesize}`,
-        url: t.magnet,
-        behaviorHints: { notWebReady: true }
+    streams: torrents.filter(t => t.magnet).map(t => {
+      if (rdKey) {
+        const externalUrl = `${baseUrl}/rd/${encodeURIComponent(t.magnet)}?key=${encodeURIComponent(rdKey)}`;
+        console.log('Stream URL:', externalUrl.substring(0, 100) + '...');
+        return {
+          name: 'Nyaa + RealDebrid',
+          title: `🎬 ${t.name}\n👥 ${t.seeders} | 📦 ${t.filesize}`,
+          externalUrl: externalUrl
+        };
+      } else {
+        return {
+          name: 'Nyaa (Magnet)',
+          title: `${t.name}\n👥 ${t.seeders} | 📦 ${t.filesize}`,
+          url: t.magnet,
+          behaviorHints: { notWebReady: true }
+        };
       }
-    )
+    })
   };
 });
 
@@ -257,11 +266,24 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // RealDebrid callback
 app.get('/rd/:magnet', async (req, res) => {
+  console.log('🔴 RD callback called!');
+  console.log('Magnet param length:', req.params.magnet?.length);
+  console.log('Query key:', req.query.key ? 'provided' : 'missing');
+  
   const apiKey = req.query.key || REALDEBRID_API_KEY;
-  if (!apiKey) return res.status(400).send('API key required');
+  if (!apiKey) {
+    console.log('❌ No API key');
+    return res.status(400).send('API key required');
+  }
   
   const stream = await getRealDebridStream(decodeURIComponent(req.params.magnet), apiKey);
-  stream ? res.redirect(stream) : res.status(500).send('Failed');
+  if (stream) {
+    console.log('✅ Redirecting to stream');
+    res.redirect(stream);
+  } else {
+    console.log('❌ RD failed');
+    res.status(500).send('Failed');
+  }
 });
 
 // Start server
