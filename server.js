@@ -10,9 +10,9 @@ let todayAnimeCache = [];
 
 const manifest = {
   id: 'cz.anime.nyaa.direct',
-  version: '3.0.0',
+  version: '3.2.0',
   name: 'Anime Today + Nyaa',
-  description: 'Dnešní anime s přímými streamy z Nyaa',
+  description: 'Dnešní anime s přímými streamy z Nyaa přes RealDebrid',
   resources: ['catalog', 'meta', 'stream'],
   types: ['series'],
   catalogs: [
@@ -27,7 +27,6 @@ const manifest = {
 
 const builder = new addonBuilder(manifest);
 
-// Získat dnešní anime z AniList
 async function getTodayAnime() {
   const query = `
     query ($weekStart: Int, $weekEnd: Int) {
@@ -72,8 +71,7 @@ async function getTodayAnime() {
   }
 }
 
-// Vyhledat na Nyaa a získat magnet linky
-async function searchNyaaWithMagnets(animeName, episode) {
+async function searchNyaa(animeName, episode) {
   try {
     const cleanName = animeName
       .replace(/Season \d+/i, '')
@@ -85,7 +83,7 @@ async function searchNyaaWithMagnets(animeName, episode) {
     const searchQuery = `${cleanName} ${episode}`.trim();
     const rssUrl = `https://nyaa.si/?page=rss&q=${encodeURIComponent(searchQuery)}&c=1_2&f=0`;
     
-    console.log(`Nyaa: "${searchQuery}"`);
+    console.log(`Nyaa search: "${searchQuery}"`);
     
     const response = await axios.get(rssUrl, {
       timeout: 10000,
@@ -96,94 +94,75 @@ async function searchNyaaWithMagnets(animeName, episode) {
     const result = await parser.parseStringPromise(response.data);
 
     if (!result.rss?.channel?.[0]?.item) {
+      console.log('No items in RSS');
       return [];
     }
 
     const torrents = result.rss.channel[0].item.map(item => {
       const link = item.link?.[0] || '';
-      const nyaaId = link.match(/\/view\/(\d+)/);
-      
-      // Zkusit získat magnet přímo z GUID nebo description
-      let magnetUrl = null;
-      
-      // Nyaa RSS má torrent link v guid nebo link
-      if (item.guid?.[0]) {
-        const guid = typeof item.guid[0] === 'string' ? item.guid[0] : item.guid[0]._;
-        if (guid.includes('magnet:')) {
-          magnetUrl = guid;
-        }
-      }
-      
-      // Fallback: vytvořit torrent download link
-      if (!magnetUrl && nyaaId) {
-        magnetUrl = `https://nyaa.si/download/${nyaaId[1]}.torrent`;
-      }
+      const nyaaId = link.match(/\/view\/(\d+)/)?.[1];
       
       return {
         title: item.title?.[0] || '',
-        nyaaId: nyaaId ? nyaaId[1] : null,
-        magnetUrl: magnetUrl,
+        nyaaId: nyaaId,
+        torrentUrl: nyaaId ? `https://nyaa.si/download/${nyaaId}.torrent` : null,
         size: item['nyaa:size']?.[0] || 'Unknown',
         seeders: parseInt(item['nyaa:seeders']?.[0] || 0)
       };
     });
 
-    return torrents
-      .filter(t => t.magnetUrl) // Jen torrenty s linkem
-      .sort((a, b) => b.seeders - a.seeders)
-      .slice(0, 10);
+    const valid = torrents.filter(t => t.torrentUrl).sort((a, b) => b.seeders - a.seeders);
+    console.log(`Found ${valid.length} torrents`);
+    return valid;
   } catch (error) {
     console.error('Nyaa error:', error.message);
     return [];
   }
 }
 
-// Získat magnet link z Nyaa stránky
-async function getMagnetFromNyaa(nyaaId) {
+async function getRealDebridStream(torrentUrl) {
+  if (!REALDEBRID_API_KEY) {
+    console.log('No RealDebrid API key');
+    return null;
+  }
+
   try {
-    const response = await axios.get(`https://nyaa.si/view/${nyaaId}`, {
+    console.log(`RealDebrid: Downloading torrent...`);
+    
+    // 1. Stáhnout torrent soubor
+    const torrentResponse = await axios.get(torrentUrl, {
+      responseType: 'arraybuffer',
       timeout: 10000,
       headers: { 'User-Agent': 'Stremio-Anime-Addon/3.0' }
     });
 
-    const magnetMatch = response.data.match(/magnet:\?xt=urn:btih:[a-zA-Z0-9]+[^"'\s]*/);
-    if (magnetMatch) {
-      return magnetMatch[0];
-    }
-    return null;
-  } catch (error) {
-    console.error(`Magnet error for ${nyaaId}:`, error.message);
-    return null;
-  }
-}
+    const torrentBuffer = Buffer.from(torrentResponse.data);
+    const torrentBase64 = torrentBuffer.toString('base64');
 
-// RealDebrid - přidat torrent a získat stream link
-async function addToRealDebrid(magnetUrl) {
-  if (!REALDEBRID_API_KEY) {
-    return null;
-  }
+    console.log(`RealDebrid: Uploading to RD...`);
 
-  try {
-    // 1. Přidat magnet
-    const addResponse = await axios.post(
-      'https://api.real-debrid.com/rest/1.0/torrents/addMagnet',
-      `magnet=${encodeURIComponent(magnetUrl)}`,
+    // 2. Nahrát do RealDebrid
+    const uploadResponse = await axios.put(
+      'https://api.real-debrid.com/rest/1.0/torrents/addTorrent',
+      torrentBase64,
       {
         headers: {
           'Authorization': `Bearer ${REALDEBRID_API_KEY}`,
-          'Content-Type': 'application/x-www-form-urlencoded'
+          'Content-Type': 'application/x-bittorrent'
         },
         timeout: 10000
       }
     );
 
-    if (!addResponse.data?.id) {
+    if (!uploadResponse.data?.id) {
+      console.log('RealDebrid: Upload failed');
       return null;
     }
 
-    const torrentId = addResponse.data.id;
+    const torrentId = uploadResponse.data.id;
+    console.log(`RealDebrid: Torrent ID ${torrentId}`);
 
-    // 2. Vybrat všechny soubory
+    // 3. Vybrat všechny soubory
     await axios.post(
       `https://api.real-debrid.com/rest/1.0/torrents/selectFiles/${torrentId}`,
       'files=all',
@@ -196,26 +175,38 @@ async function addToRealDebrid(magnetUrl) {
       }
     );
 
-    // 3. Počkat chvíli na zpracování
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    console.log(`RealDebrid: Waiting for processing...`);
 
-    // 4. Získat info o torrentu
-    const infoResponse = await axios.get(
-      `https://api.real-debrid.com/rest/1.0/torrents/info/${torrentId}`,
-      {
-        headers: { 'Authorization': `Bearer ${REALDEBRID_API_KEY}` },
-        timeout: 5000
+    // 4. Počkat na zpracování (až 10 sekund)
+    let links = null;
+    for (let i = 0; i < 5; i++) {
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      const infoResponse = await axios.get(
+        `https://api.real-debrid.com/rest/1.0/torrents/info/${torrentId}`,
+        {
+          headers: { 'Authorization': `Bearer ${REALDEBRID_API_KEY}` },
+          timeout: 5000
+        }
+      );
+
+      if (infoResponse.data?.links?.[0]) {
+        links = infoResponse.data.links;
+        break;
       }
-    );
+    }
 
-    if (!infoResponse.data?.links?.[0]) {
+    if (!links || links.length === 0) {
+      console.log('RealDebrid: No links available');
       return null;
     }
+
+    console.log(`RealDebrid: Got ${links.length} links, unrestricting...`);
 
     // 5. Unrestrict první link
     const unrestrictResponse = await axios.post(
       'https://api.real-debrid.com/rest/1.0/unrestrict/link',
-      `link=${encodeURIComponent(infoResponse.data.links[0])}`,
+      `link=${encodeURIComponent(links[0])}`,
       {
         headers: {
           'Authorization': `Bearer ${REALDEBRID_API_KEY}`,
@@ -226,9 +217,11 @@ async function addToRealDebrid(magnetUrl) {
     );
 
     if (unrestrictResponse.data?.download) {
+      console.log(`✅ RealDebrid: Success!`);
       return unrestrictResponse.data.download;
     }
 
+    console.log('RealDebrid: No download link');
     return null;
   } catch (error) {
     console.error('RealDebrid error:', error.message);
@@ -245,7 +238,6 @@ async function updateCache() {
 updateCache();
 cron.schedule('*/15 * * * *', updateCache);
 
-// CATALOG - zobrazí dnešní anime
 builder.defineCatalogHandler(async (args) => {
   if (args.type === 'series' && args.id === 'anime-today-nyaa') {
     const skip = parseInt(args.extra?.skip) || 0;
@@ -256,8 +248,6 @@ builder.defineCatalogHandler(async (args) => {
     
     const metas = todayAnimeCache.map(schedule => {
       const media = schedule.media;
-      
-      // Vlastní ID ve formátu nyaa:ANILIST_ID:EPISODE
       const id = `nyaa:${media.id}:${schedule.episode}`;
       
       return {
@@ -280,10 +270,7 @@ builder.defineCatalogHandler(async (args) => {
   return { metas: [] };
 });
 
-// META - vrátí detail anime
 builder.defineMetaHandler(async (args) => {
-  console.log('Meta request:', args.id);
-  
   const idParts = args.id.split(':');
   
   if (idParts[0] !== 'nyaa' || idParts.length !== 3) {
@@ -293,7 +280,6 @@ builder.defineMetaHandler(async (args) => {
   const anilistId = parseInt(idParts[1]);
   const episode = parseInt(idParts[2]);
 
-  // Najít anime v cache
   const schedule = todayAnimeCache.find(s => 
     s.media.id === anilistId && s.episode === episode
   );
@@ -328,7 +314,6 @@ builder.defineMetaHandler(async (args) => {
   };
 });
 
-// STREAM - najde torrenty na Nyaa
 builder.defineStreamHandler(async (args) => {
   console.log('Stream request:', args.id);
   
@@ -351,57 +336,72 @@ builder.defineStreamHandler(async (args) => {
   }
 
   const animeName = schedule.media.title.romaji || schedule.media.title.english;
-  const torrents = await searchNyaaWithMagnets(animeName, episode);
+  
+  // 1. Najít torrenty na Nyaa (rychle, bez stahování)
+  const torrents = await searchNyaa(animeName, episode);
 
   if (torrents.length === 0) {
     console.log('No torrents found');
     return { streams: [] };
   }
 
-  console.log(`Found ${torrents.length} torrents`);
   const streams = [];
 
-  // Zpracovat všechny torrenty
+  // 2. Pro každý torrent vytvořit stream s "internalUrl"
+  // Když uživatel klikne, Stremio zavolá naši URL a my teprve pak zpracujeme RealDebrid
   for (const torrent of torrents) {
-    if (!torrent.nyaaId) continue;
-
-    // Získat magnet link
-    const magnetUrl = await getMagnetFromNyaa(torrent.nyaaId);
-    if (!magnetUrl) {
-      console.log(`No magnet for ${torrent.nyaaId}`);
-      continue;
-    }
-
-    // Zkusit RealDebrid pokud je API klíč
-    let streamUrl = magnetUrl;
-    let name = 'Nyaa (Torrent)';
-    
     if (REALDEBRID_API_KEY) {
-      const rdUrl = await addToRealDebrid(magnetUrl);
-      if (rdUrl) {
-        streamUrl = rdUrl;
-        name = 'Nyaa (RealDebrid)';
-        console.log(`RealDebrid OK for ${torrent.title.substring(0, 50)}`);
-      }
+      // S RealDebrid: přidat stream který při kliknutí spustí RD
+      streams.push({
+        name: 'Nyaa + RealDebrid',
+        title: `🎬 ${torrent.title}\n👥 ${torrent.seeders} seeders | 📦 ${torrent.size}`,
+        // externalUrl přesměruje na callback endpoint který zpracuje RD
+        externalUrl: `${process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`}/rd/${encodeURIComponent(torrent.torrentUrl)}`
+      });
+    } else {
+      // Bez RealDebrid: jen torrent link
+      streams.push({
+        name: 'Nyaa (Torrent)',
+        title: `${torrent.title}\n👥 ${torrent.seeders} seeders | 📦 ${torrent.size}`,
+        url: torrent.torrentUrl,
+        behaviorHints: {
+          notWebReady: true
+        }
+      });
     }
-
-    streams.push({
-      name: name,
-      title: `${torrent.title}\n👥 ${torrent.seeders} seeders | 📦 ${torrent.size}`,
-      url: streamUrl,
-      behaviorHints: {
-        notWebReady: streamUrl === magnetUrl
-      }
-    });
   }
 
   console.log(`Returning ${streams.length} streams`);
   return { streams };
 });
 
-serveHTTP(builder.getInterface(), { port: PORT });
+// Endpoint pro RealDebrid zpracování (volá se při kliknutí)
+const express = require('express');
+const app = express();
 
-console.log(`🚀 Anime Today + Nyaa běží na portu ${PORT}`);
-console.log(`📺 Manifest: http://localhost:${PORT}/manifest.json`);
-console.log(`🔑 RealDebrid: ${REALDEBRID_API_KEY ? '✅ Aktivní' : '❌ Neaktivní (nastavte REALDEBRID_API_KEY)'}`);
+// Stremio addon routes
+const addonInterface = builder.getInterface();
+for (const resource in addonInterface) {
+  app.get(resource, addonInterface[resource]);
+}
 
+// RealDebrid callback endpoint
+app.get('/rd/:torrentUrl', async (req, res) => {
+  const torrentUrl = decodeURIComponent(req.params.torrentUrl);
+  console.log(`RD callback: ${torrentUrl}`);
+  
+  const streamUrl = await getRealDebridStream(torrentUrl);
+  
+  if (streamUrl) {
+    // Přesměrovat na direct stream
+    res.redirect(streamUrl);
+  } else {
+    res.status(500).send('RealDebrid failed');
+  }
+});
+
+app.listen(PORT, () => {
+  console.log(`🚀 Anime Today + Nyaa běží na portu ${PORT}`);
+  console.log(`📺 Manifest: http://localhost:${PORT}/manifest.json`);
+  console.log(`🔑 RealDebrid: ${REALDEBRID_API_KEY ? '✅ Aktivní' : '❌ Neaktivní'}`);
+});
