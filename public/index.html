@@ -125,6 +125,12 @@
             box-shadow: 0 12px 24px rgba(102, 126, 234, 0.3);
         }
         
+        .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
         .btn-secondary {
             background: #10b981;
             color: white;
@@ -132,15 +138,6 @@
         
         .btn-secondary:hover {
             background: #059669;
-        }
-        
-        .btn-danger {
-            background: #ef4444;
-            color: white;
-        }
-        
-        .btn-danger:hover {
-            background: #dc2626;
         }
         
         .status {
@@ -160,6 +157,12 @@
             background: #fef3c7;
             color: #92400e;
             border: 1px solid #f59e0b;
+        }
+        
+        .status-error {
+            background: #fee2e2;
+            color: #991b1b;
+            border: 1px solid #ef4444;
         }
         
         .help-text {
@@ -196,109 +199,92 @@
         <h1>Anime Today + Nyaa</h1>
         <p class="subtitle">Dnešní anime s torrenty z Nyaa přes RealDebrid</p>
         
-        <!-- RealDebrid API Key Section -->
+        <!-- API Keys Section -->
         <div class="section">
-            <div class="section-title">🔑 RealDebrid API Klíč</div>
+            <div class="section-title">🔑 API Klíče</div>
             
-            <div id="apiKeyStatus"></div>
+            <div id="statusMessage"></div>
             
             <div class="input-group">
-                <label for="apiKey">API Klíč</label>
-                <input type="text" id="apiKey" placeholder="Vložte RealDebrid API klíč" />
+                <label for="rdKey">RealDebrid API Klíč (povinné)</label>
+                <input type="text" id="rdKey" placeholder="Váš RealDebrid API klíč" />
                 <div class="help-text">
-                    Získejte klíč na <a href="https://real-debrid.com/apitoken" target="_blank">real-debrid.com/apitoken</a>
+                    Získejte na <a href="https://real-debrid.com/apitoken" target="_blank">real-debrid.com/apitoken</a>
                 </div>
             </div>
             
-            <button class="btn btn-secondary" onclick="saveApiKey()">💾 Uložit API Klíč</button>
-            <button class="btn btn-danger" onclick="clearApiKey()" style="margin-top: 8px;">🗑️ Smazat API Klíč</button>
+            <div class="input-group">
+                <label for="tmdbKey">TMDB API Klíč (volitelné - pro HD wallpapery)</label>
+                <input type="text" id="tmdbKey" placeholder="Váš TMDB API klíč (nepovinné)" />
+                <div class="help-text">
+                    Získejte na <a href="https://www.themoviedb.org/settings/api" target="_blank">themoviedb.org/settings/api</a>
+                </div>
+            </div>
         </div>
         
         <!-- Install Section -->
         <div class="section">
             <div class="section-title">📦 Instalace do Stremio</div>
             
-            <a href="#" id="installButton" class="btn btn-primary">
-                🚀 Instalovat do Stremio
+            <a href="#" id="installButton" class="btn btn-primary" onclick="install(event)">
+                🚀 Vygenerovat & Instalovat
             </a>
             
-            <div class="url-box" id="addonUrl">Načítání...</div>
-            <button class="btn btn-secondary" onclick="copyUrl()">📋 Zkopírovat URL</button>
+            <div id="addonUrlContainer" style="display: none;">
+                <div class="url-box" id="addonUrl"></div>
+                <button class="btn btn-secondary" onclick="copyUrl()">📋 Zkopírovat URL</button>
+            </div>
         </div>
         
         <!-- Info -->
         <div class="section">
             <div class="section-title">ℹ️ Jak to funguje</div>
             <p style="font-size: 14px; color: #374151; line-height: 1.6;">
-                Tento addon zobrazuje dnešní anime epizody z AniList a vyhledává torrenty na Nyaa.si. 
-                S RealDebrid API klíčem získáte přímé streaming linky. Bez klíče budete muset použít torrent klienta.
+                Každá instalace je unikátní s vašimi API klíči. Váš RealDebrid klíč je zakódovaný do addon URL, 
+                takže nikdo jiný nemůže používat vaše kredity. TMDB klíč je volitelný a přidá HD wallpapery.
             </p>
         </div>
     </div>
 
     <script>
-        const currentUrl = window.location.origin;
+        const baseUrl = window.location.origin;
         
-        function updateInstallUrl() {
-            const apiKey = localStorage.getItem('rd_api_key');
-            let manifestUrl = `${currentUrl}/manifest.json`;
-            
-            if (apiKey) {
-                manifestUrl += `?rd=${encodeURIComponent(apiKey)}`;
-            }
-            
-            const installUrl = `stremio://${currentUrl.replace(/^https?:\/\//, '')}/manifest.json${apiKey ? `?rd=${encodeURIComponent(apiKey)}` : ''}`;
-            
-            document.getElementById('addonUrl').textContent = manifestUrl;
-            document.getElementById('installButton').href = installUrl;
+        function showStatus(message, type) {
+            const statusDiv = document.getElementById('statusMessage');
+            const className = type === 'error' ? 'status-error' : 
+                            type === 'warning' ? 'status-warning' : 'status-success';
+            statusDiv.innerHTML = `<div class="status ${className}">${message}</div>`;
         }
         
-        function updateStatus() {
-            const apiKey = localStorage.getItem('rd_api_key');
-            const statusDiv = document.getElementById('apiKeyStatus');
+        function install(event) {
+            event.preventDefault();
             
-            if (apiKey) {
-                statusDiv.innerHTML = `
-                    <div class="status status-success">
-                        ✅ RealDebrid API klíč je uložen (${apiKey.substring(0, 10)}...)
-                    </div>
-                `;
-                // Vyprázdnit input když je klíč uložen
-                document.getElementById('apiKey').value = '';
-                document.getElementById('apiKey').placeholder = 'Klíč je uložen - zadejte nový pro změnu';
-            } else {
-                statusDiv.innerHTML = `
-                    <div class="status status-warning">
-                        ⚠️ RealDebrid API klíč není nastaven. Budete potřebovat torrent klienta.
-                    </div>
-                `;
-                document.getElementById('apiKey').placeholder = 'Vložte RealDebrid API klíč';
-            }
+            const rdKey = document.getElementById('rdKey').value.trim();
+            const tmdbKey = document.getElementById('tmdbKey').value.trim();
             
-            updateInstallUrl();
-        }
-        
-        function saveApiKey() {
-            const apiKey = document.getElementById('apiKey').value.trim();
-            
-            if (!apiKey) {
-                alert('Zadejte API klíč!');
+            if (!rdKey) {
+                showStatus('⚠️ RealDebrid API klíč je povinný!', 'error');
                 return;
             }
             
-            localStorage.setItem('rd_api_key', apiKey);
-            document.getElementById('apiKey').value = '';
-            updateStatus();
-            alert('✅ API klíč uložen! Klikněte na "Instalovat do Stremio" s novým URL.');
-        }
-        
-        function clearApiKey() {
-            if (confirm('Opravdu chcete smazat RealDebrid API klíč?')) {
-                localStorage.removeItem('rd_api_key');
-                document.getElementById('apiKey').value = '';
-                updateStatus();
-                alert('🗑️ API klíč smazán.');
-            }
+            // Zakódovat klíče do base64 pro bezpečnost
+            const config = btoa(JSON.stringify({
+                rd: rdKey,
+                tmdb: tmdbKey || undefined
+            }));
+            
+            // Vytvořit addon URL s unikátním config
+            const manifestUrl = `${baseUrl}/manifest.json?config=${config}`;
+            const installUrl = `stremio://${baseUrl.replace(/^https?:\/\//, '')}/manifest.json?config=${config}`;
+            
+            // Zobrazit URL
+            document.getElementById('addonUrl').textContent = manifestUrl;
+            document.getElementById('addonUrlContainer').style.display = 'block';
+            
+            showStatus('✅ Addon URL vygenerována! Klikněte na tlačítko níže pro instalaci.', 'success');
+            
+            // Pokusit se otevřít Stremio
+            window.location.href = installUrl;
         }
         
         function copyUrl() {
@@ -312,11 +298,6 @@
                 alert('URL: ' + url);
             });
         }
-        
-        // Načíst status při načtení stránky (ale nezobrazovat klíč v inputu)
-        window.addEventListener('load', () => {
-            updateStatus();
-        });
     </script>
 </body>
 </html>
