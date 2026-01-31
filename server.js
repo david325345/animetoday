@@ -1,4 +1,4 @@
-const { addonBuilder, serveHTTP } = require('stremio-addon-sdk');
+const { addonBuilder, getRouter } = require('stremio-addon-sdk');
 const axios = require('axios');
 const cron = require('node-cron');
 const express = require('express');
@@ -265,10 +265,10 @@ app.get('/rd/:magnet', async (req, res) => {
 });
 
 // Start server
-const addonInterface = builder.getInterface();
+const addonRouter = getRouter(builder.getInterface());
 
 // Mount addon routes manually (without SDK landing page)
-app.use(addonInterface);
+app.use(addonRouter);
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
