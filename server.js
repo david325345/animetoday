@@ -5,13 +5,12 @@ const cron = require('node-cron');
 const PORT = process.env.PORT || 7000;
 
 let todayAnimeCache = [];
-let lastUpdate = null;
 
 const manifest = {
-  id: 'cz.anime.anilist.catalog',
-  version: '1.0.4',
-  name: 'Anime Today Catalog',
-  description: 'Katalog dnešních anime epizod z AniList',
+  id: 'cz.anime.today',
+  version: '2.0.0',
+  name: 'Anime Today',
+  description: 'Dnešní anime epizody z AniList',
   resources: ['catalog'],
   types: ['series'],
   catalogs: [
@@ -21,7 +20,7 @@ const manifest = {
       name: 'Dnešní Anime Epizody'
     }
   ],
-  idPrefixes: ['anilist:']
+  idPrefixes: ['tt:', 'kitsu:', 'anilist:']
 };
 
 const builder = new addonBuilder(manifest);
@@ -43,13 +42,8 @@ async function getTodayAnime() {
             description
             genres
             averageScore
-            episodes
             season
             seasonYear
-            externalLinks {
-              site
-              url
-            }
           }
         }
       }
@@ -66,21 +60,64 @@ async function getTodayAnime() {
       variables: { weekStart: dayStart, weekEnd: dayEnd }
     });
 
-    if (response.data && response.data.data) {
-      return response.data.data.Page.airingSchedules || [];
+    if (response.data?.data?.Page?.airingSchedules) {
+      return response.data.data.Page.airingSchedules;
     }
     return [];
   } catch (error) {
-    console.error('Chyba při získávání dat z AniList:', error.message);
+    console.error('AniList error:', error.message);
     return [];
   }
 }
 
+// Najít Kitsu ID podle MAL ID
+async function getKitsuId(malId) {
+  if (!malId) return null;
+  
+  try {
+    const response = await axios.get(`https://kitsu.io/api/edge/anime`, {
+      params: {
+        'filter[myAnimeListId]': malId
+      },
+      timeout: 5000
+    });
+
+    if (response.data?.data?.[0]?.id) {
+      return response.data.data[0].id;
+    }
+    return null;
+  } catch (error) {
+    console.error(`Kitsu lookup failed for MAL ${malId}:`, error.message);
+    return null;
+  }
+}
+
 async function updateCache() {
-  console.log('Aktualizace cache dnešních anime...');
-  todayAnimeCache = await getTodayAnime();
-  lastUpdate = new Date();
-  console.log(`Cache aktualizována: ${todayAnimeCache.length} anime nalezeno`);
+  console.log('Aktualizace cache...');
+  const schedules = await getTodayAnime();
+  
+  // Mapovat na Kitsu ID
+  const animeWithKitsu = [];
+  for (const schedule of schedules) {
+    let kitsuId = null;
+    
+    if (schedule.media.idMal) {
+      kitsuId = await getKitsuId(schedule.media.idMal);
+    }
+    
+    animeWithKitsu.push({ 
+      ...schedule, 
+      kitsuId: kitsuId 
+    });
+    
+    if (!kitsuId) {
+      console.log(`⚠️ Kitsu ID nenalezeno: ${schedule.media.title.romaji}`);
+    }
+  }
+  
+  todayAnimeCache = animeWithKitsu;
+  const withKitsu = animeWithKitsu.filter(a => a.kitsuId).length;
+  console.log(`Cache: ${todayAnimeCache.length} anime (${withKitsu} s Kitsu ID)`);
 }
 
 updateCache();
@@ -91,39 +128,36 @@ builder.defineCatalogHandler(async (args) => {
     const skip = parseInt(args.extra?.skip) || 0;
     
     if (skip > 0) {
-      console.log(`Skip ${skip} - returning empty (no more pages)`);
       return { metas: [] };
     }
     
     const metas = todayAnimeCache.map(schedule => {
       const media = schedule.media;
       
-      // Vytvoříme unikátní ID pro tuto konkrétní epizodu tohoto anime
-      const uniqueId = `anilist:${media.id}:ep${schedule.episode}`;
+      // Priorita: Kitsu ID > MAL ID > AniList ID
+      let id;
+      if (schedule.kitsuId) {
+        id = `kitsu:${schedule.kitsuId}`;
+      } else if (media.idMal) {
+        id = `kitsu:${media.idMal}`;
+      } else {
+        id = `anilist:${media.id}`;
+      }
       
       return {
-        id: uniqueId,
+        id: id,
         type: 'series',
         name: media.title.romaji || media.title.english || media.title.native,
         poster: media.coverImage.large,
         background: media.bannerImage,
-        description: `${media.description ? media.description.replace(/<[^>]*>/g, '') : 'Bez popisu'}`,
+        description: media.description ? media.description.replace(/<[^>]*>/g, '') : '',
         genres: media.genres || [],
-        releaseInfo: `${media.seasonYear ? `${media.season} ${media.seasonYear}` : ''} - Epizoda ${schedule.episode}`,
-        imdbRating: media.averageScore ? (media.averageScore / 10).toFixed(1) : undefined,
-        videos: [
-          {
-            id: uniqueId,
-            title: `Epizoda ${schedule.episode}`,
-            episode: schedule.episode,
-            season: 1,
-            released: new Date(schedule.airingAt * 1000).toISOString()
-          }
-        ]
+        releaseInfo: `${media.season || ''} ${media.seasonYear || ''} - Ep ${schedule.episode}`.trim(),
+        imdbRating: media.averageScore ? (media.averageScore / 10).toFixed(1) : undefined
       };
     });
 
-    console.log(`Returning ${metas.length} metas (skip=${skip})`);
+    console.log(`Catalog: ${metas.length} metas`);
     return { metas };
   }
 
@@ -132,5 +166,5 @@ builder.defineCatalogHandler(async (args) => {
 
 serveHTTP(builder.getInterface(), { port: PORT });
 
-console.log(`🚀 Anime Today Catalog běží na portu ${PORT}`);
+console.log(`🚀 Anime Today běží na portu ${PORT}`);
 console.log(`📺 Manifest: http://localhost:${PORT}/manifest.json`);

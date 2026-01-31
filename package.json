@@ -1,7 +1,7 @@
 {
-  "name": "stremio-anime-addon",
-  "version": "1.0.0",
-  "description": "Stremio addon pro sledování nových anime epizod přes AniList a Nyaa s RealDebrid",
+  "name": "stremio-anime-today",
+  "version": "2.0.0",
+  "description": "Dnešní anime z AniList s Kitsu ID",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
