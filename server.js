@@ -250,6 +250,11 @@ updateCache();
 
 // ===== Stremio Handlers =====
 builder.defineCatalogHandler(async (args) => {
+  console.log('📁 Catalog request');
+  console.log('  - type:', args.type, 'id:', args.id);
+  console.log('  - transportUrl:', args.transportUrl ? args.transportUrl.substring(0, 100) : 'none');
+  console.log('  - args.config:', JSON.stringify(args.config || {}));
+  
   if (args.type !== 'series' || args.id !== 'anime-today') return { metas: [] };
   if (parseInt(args.extra?.skip) > 0) return { metas: [] };
 
@@ -260,9 +265,14 @@ builder.defineCatalogHandler(async (args) => {
     if (match) {
       try {
         userConfig = JSON.parse(Buffer.from(decodeURIComponent(match[1]), 'base64').toString());
-      } catch (e) {}
+        console.log('  - Config from transportUrl:', userConfig.rd ? 'RD+' : '', userConfig.tmdb ? 'TMDB' : '');
+      } catch (e) {
+        console.error('  - Config decode error:', e.message);
+      }
     }
   }
+  
+  console.log('  - Returning', todayAnimeCache.length, 'metas');
 
   return {
     metas: todayAnimeCache.map(s => {
