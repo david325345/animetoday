@@ -12,7 +12,7 @@ let todayAnimeCache = [];
 
 const manifest = {
   id: 'cz.anime.nyaa.rd',
-  version: '1.0.0',
+  version: '1.0.1',
   name: 'Anime Today + Nyaa + RealDebrid',
   description: 'Dnešní anime epizody z AniList s torrenty z Nyaa.si',
   resources: ['catalog', 'meta', 'stream'],
@@ -20,14 +20,18 @@ const manifest = {
   catalogs: [{
     type: 'series',
     id: 'anime-today',
-    name: 'Dnešní Anime'
+    name: 'Dnešní Anime',
+    extra: [{ name: 'skip', isRequired: false }]
   }],
   idPrefixes: ['nyaa:'],
   behaviorHints: {
-    configurable: true,
+    configurable: false,
     configurationRequired: false
   }
 };
+
+// Cache pro RD klíče podle user agenta (workaround)
+const rdKeyCache = new Map();
 
 const builder = new addonBuilder(manifest);
 
@@ -104,43 +108,101 @@ async function getRealDebridStream(magnet, apiKey) {
   if (!apiKey) return null;
   
   try {
+    console.log('RD: Adding magnet...');
+    
     // Add magnet
     const add = await axios.post(
       'https://api.real-debrid.com/rest/1.0/torrents/addMagnet',
       `magnet=${encodeURIComponent(magnet)}`,
-      { headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/x-www-form-urlencoded' }}
+      { 
+        headers: { 
+          'Authorization': `Bearer ${apiKey}`, 
+          'Content-Type': 'application/x-www-form-urlencoded' 
+        },
+        timeout: 10000
+      }
     );
     
     const torrentId = add.data?.id;
-    if (!torrentId) return null;
+    if (!torrentId) {
+      console.log('RD: No torrent ID');
+      return null;
+    }
+    
+    console.log(`RD: Torrent ID ${torrentId}`);
 
-    // Select files
-    await axios.post(
-      `https://api.real-debrid.com/rest/1.0/torrents/selectFiles/${torrentId}`,
-      'files=all',
-      { headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/x-www-form-urlencoded' }}
+    // Get torrent info to find files
+    const torrentInfo = await axios.get(
+      `https://api.real-debrid.com/rest/1.0/torrents/info/${torrentId}`,
+      { 
+        headers: { 'Authorization': `Bearer ${apiKey}` },
+        timeout: 5000
+      }
     );
 
-    // Wait and get links
-    for (let i = 0; i < 5; i++) {
+    // Select all files
+    const files = torrentInfo.data?.files;
+    if (!files || files.length === 0) {
+      console.log('RD: No files');
+      return null;
+    }
+
+    const fileIds = files.map((f, i) => i + 1).join(',');
+    console.log(`RD: Selecting files: ${fileIds}`);
+
+    await axios.post(
+      `https://api.real-debrid.com/rest/1.0/torrents/selectFiles/${torrentId}`,
+      `files=${fileIds}`,
+      { 
+        headers: { 
+          'Authorization': `Bearer ${apiKey}`, 
+          'Content-Type': 'application/x-www-form-urlencoded' 
+        },
+        timeout: 5000
+      }
+    );
+
+    // Wait for processing
+    console.log('RD: Waiting for processing...');
+    for (let i = 0; i < 10; i++) {
       await new Promise(r => setTimeout(r, 2000));
+      
       const info = await axios.get(
         `https://api.real-debrid.com/rest/1.0/torrents/info/${torrentId}`,
-        { headers: { 'Authorization': `Bearer ${apiKey}` }}
+        { 
+          headers: { 'Authorization': `Bearer ${apiKey}` },
+          timeout: 5000
+        }
       );
+      
+      console.log(`RD: Status: ${info.data?.status}, Links: ${info.data?.links?.length || 0}`);
+      
       if (info.data?.links?.[0]) {
-        // Unrestrict
+        // Unrestrict first link
+        console.log('RD: Unrestricting link...');
         const unrestrict = await axios.post(
           'https://api.real-debrid.com/rest/1.0/unrestrict/link',
           `link=${encodeURIComponent(info.data.links[0])}`,
-          { headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/x-www-form-urlencoded' }}
+          { 
+            headers: { 
+              'Authorization': `Bearer ${apiKey}`, 
+              'Content-Type': 'application/x-www-form-urlencoded' 
+            },
+            timeout: 5000
+          }
         );
-        return unrestrict.data?.download || null;
+        
+        if (unrestrict.data?.download) {
+          console.log('RD: ✅ Success!');
+          return unrestrict.data.download;
+        }
       }
     }
+    
+    console.log('RD: Timeout waiting for links');
     return null;
   } catch (err) {
-    console.error('RealDebrid error:', err.message);
+    console.error('RealDebrid error:', err.response?.status, err.response?.data || err.message);
     return null;
   }
 }
@@ -274,6 +336,18 @@ app.get('/', (req, res, next) => {
     return res.sendFile(path.join(__dirname, 'public', 'index.html'));
   }
   next(); // Let SDK handle API calls to /
+});
+
+// Custom manifest endpoint pro ukládání RD klíče
+app.get('/manifest.json', (req, res, next) => {
+  if (req.query.rd) {
+    // Uložit RD klíč spojený s tímto request
+    const rdKey = req.query.rd;
+    const userAgent = req.headers['user-agent'] || 'unknown';
+    rdKeyCache.set(userAgent, rdKey);
+    console.log(`💾 Saved RD key for ${userAgent.substring(0, 30)}`);
+  }
+  next(); // Pokračovat na SDK manifest handler
 });
 
 // Static files
