@@ -14,7 +14,7 @@ let todayAnimeCache = [];
 const manifest = {
   id: 'cz.anime.nyaa.rd',
   version: '1.3.0',
-  name: 'Anime Today + Nyaa',
+  name: 'Anime Today + Nyaa + RealDebrid',
   description: 'Dnešní anime s Nyaa torrenty přes RealDebrid',
   resources: ['catalog', 'meta', 'stream'],
   types: ['series'],
@@ -26,7 +26,7 @@ const manifest = {
   }],
   idPrefixes: ['nyaa:'],
   behaviorHints: {
-    configurable: true,
+    configurable: false,
     configurationRequired: false
   }
 };
@@ -250,29 +250,8 @@ updateCache();
 
 // ===== Stremio Handlers =====
 builder.defineCatalogHandler(async (args) => {
-  console.log('📁 Catalog request');
-  console.log('  - type:', args.type, 'id:', args.id);
-  console.log('  - transportUrl:', args.transportUrl ? args.transportUrl.substring(0, 100) : 'none');
-  console.log('  - args.config:', JSON.stringify(args.config || {}));
-  
   if (args.type !== 'series' || args.id !== 'anime-today') return { metas: [] };
   if (parseInt(args.extra?.skip) > 0) return { metas: [] };
-
-  // Extrahovat config z transportUrl pokud existuje
-  let userConfig = args.config || {};
-  if (args.transportUrl) {
-    const match = args.transportUrl.match(/[?&]c=([^&]+)/);
-    if (match) {
-      try {
-        userConfig = JSON.parse(Buffer.from(decodeURIComponent(match[1]), 'base64').toString());
-        console.log('  - Config from transportUrl:', userConfig.rd ? 'RD+' : '', userConfig.tmdb ? 'TMDB' : '');
-      } catch (e) {
-        console.error('  - Config decode error:', e.message);
-      }
-    }
-  }
-  
-  console.log('  - Returning', todayAnimeCache.length, 'metas');
 
   return {
     metas: todayAnimeCache.map(s => {
@@ -347,27 +326,8 @@ builder.defineStreamHandler(async (args) => {
   }
   if (!torrents.length) return { streams: [] };
 
-  // Extrahovat config z transportUrl
-  let rdKey = null;
-  if (args.transportUrl) {
-    const match = args.transportUrl.match(/[?&]c=([^&]+)/);
-    if (match) {
-      try {
-        const config = JSON.parse(Buffer.from(decodeURIComponent(match[1]), 'base64').toString());
-        rdKey = config.rd;
-        console.log('Stream - RD key from transportUrl:', rdKey ? 'yes' : 'no');
-      } catch (e) {
-        console.error('Config decode error:', e.message);
-      }
-    }
-  }
-  
-  // Fallback na args.config
-  if (!rdKey) {
-    rdKey = args.config?.rd;
-    console.log('Stream - RD key from args.config:', rdKey ? 'yes' : 'no');
-  }
-
+  // Použít RD klíč z ENV
+  const rdKey = REALDEBRID_API_KEY;
   const baseUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
 
   return {
@@ -421,53 +381,38 @@ app.get('/rd/:magnet', async (req, res) => {
 // Získat addon interface
 const addonInterface = builder.getInterface();
 
-// Custom manifest handler pro config v query parametru
+// Manifest route
 app.get('/manifest.json', (req, res) => {
-  if (req.query.c) {
-    try {
-      const config = JSON.parse(Buffer.from(decodeURIComponent(req.query.c), 'base64').toString());
-      const customManifest = { ...manifest };
-      const hash = require('crypto').createHash('md5').update(JSON.stringify(config)).digest('hex').substring(0, 8);
-      customManifest.id = `${manifest.id}.${hash}`;
-      customManifest.name = 'Anime Today (Personal)';
-      console.log('Custom manifest with config:', config.rd ? 'RD+' : '', config.tmdb ? 'TMDB' : '');
-      res.json(customManifest);
-      return;
-    } catch (err) {
-      console.error('Config decode error:', err.message);
-    }
-  }
-  // Default manifest
   res.json(manifest);
 });
 
-// Addon routes s config
+// Addon routes - bez custom config
 app.get('/catalog/:type/:id.json', async (req, res) => {
   try {
-    const config = req.query.c ? JSON.parse(Buffer.from(decodeURIComponent(req.query.c), 'base64').toString()) : {};
-    const result = await addonInterface.catalog({ type: req.params.type, id: req.params.id, extra: req.query, config });
+    const result = await addonInterface.catalog({ type: req.params.type, id: req.params.id, extra: req.query });
     res.json(result);
   } catch (err) {
+    console.error('Catalog error:', err.message);
     res.status(500).json({ metas: [] });
   }
 });
 
 app.get('/meta/:type/:id.json', async (req, res) => {
   try {
-    const config = req.query.c ? JSON.parse(Buffer.from(decodeURIComponent(req.query.c), 'base64').toString()) : {};
-    const result = await addonInterface.meta({ type: req.params.type, id: req.params.id, config });
+    const result = await addonInterface.meta({ type: req.params.type, id: req.params.id });
     res.json(result);
   } catch (err) {
+    console.error('Meta error:', err.message);
     res.status(500).json({ meta: null });
   }
 });
 
 app.get('/stream/:type/:id.json', async (req, res) => {
   try {
-    const config = req.query.c ? JSON.parse(Buffer.from(decodeURIComponent(req.query.c), 'base64').toString()) : {};
-    const result = await addonInterface.stream({ type: req.params.type, id: req.params.id, config });
+    const result = await addonInterface.stream({ type: req.params.type, id: req.params.id });
     res.json(result);
   } catch (err) {
+    console.error('Stream error:', err.message);
     res.status(500).json({ streams: [] });
   }
 });
