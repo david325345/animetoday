@@ -47,7 +47,7 @@ async function getTodayAnime() {
           media {
             id
             title { romaji english native }
-            coverImage { large }
+            coverImage { extraLarge large }
             bannerImage
             description
             genres
@@ -227,8 +227,9 @@ builder.defineCatalogHandler(async (args) => {
       id: `nyaa:${s.media.id}:${s.episode}`,
       type: 'series',
       name: s.media.title.romaji || s.media.title.english || s.media.title.native,
-      poster: s.media.coverImage.large,
+      poster: s.media.coverImage.extraLarge || s.media.coverImage.large,
       background: s.media.bannerImage,
+      logo: s.media.bannerImage,
       description: `Epizoda ${s.episode}\n\n${(s.media.description || '').replace(/<[^>]*>/g, '')}`,
       genres: s.media.genres || [],
       releaseInfo: `${s.media.season || ''} ${s.media.seasonYear || ''} - Ep ${s.episode}`.trim(),
@@ -250,8 +251,9 @@ builder.defineMetaHandler(async (args) => {
       id: args.id,
       type: 'series',
       name: m.title.romaji || m.title.english || m.title.native,
-      poster: m.coverImage.large,
+      poster: m.coverImage.extraLarge || m.coverImage.large,
       background: m.bannerImage,
+      logo: m.bannerImage,
       description: (m.description || '').replace(/<[^>]*>/g, ''),
       genres: m.genres || [],
       releaseInfo: `${m.season || ''} ${m.seasonYear || ''} - Epizoda ${schedule.episode}`.trim(),
@@ -261,7 +263,8 @@ builder.defineMetaHandler(async (args) => {
         title: `Epizoda ${schedule.episode}`,
         episode: schedule.episode,
         season: 1,
-        released: new Date(schedule.airingAt * 1000).toISOString()
+        released: new Date(schedule.airingAt * 1000).toISOString(),
+        thumbnail: m.coverImage.extraLarge || m.coverImage.large
       }]
     }
   };
