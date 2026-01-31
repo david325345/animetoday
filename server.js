@@ -367,6 +367,9 @@ builder.defineStreamHandler(async (args) => {
 
 const app = express();
 
+// Servovat statické soubory z public složky
+app.use(express.static('public'));
+
 app.get('/rd/:magnetUrl', async (req, res) => {
   const magnetUrl = decodeURIComponent(req.params.magnetUrl);
   const apiKey = req.query.key || REALDEBRID_API_KEY;
