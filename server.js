@@ -420,11 +420,15 @@ app.get('/manifest.json', (req, res) => {
 });
 
 app.get('/catalog/:type/:id.json', async (req, res) => {
+  console.log(`📁 Catalog request: ${req.params.type}/${req.params.id}`);
   res.setHeader('Content-Type', 'application/json');
   res.setHeader('Access-Control-Allow-Origin', '*');
   try {
     const handler = builder.getInterface().catalog;
+    console.log('Handler exists:', !!handler);
+    
     if (!handler) {
+      console.error('❌ Catalog handler not found');
       return res.status(500).send({ metas: [] });
     }
     
@@ -433,9 +437,10 @@ app.get('/catalog/:type/:id.json', async (req, res) => {
       id: req.params.id,
       extra: req.query
     });
+    console.log(`✅ Catalog returned ${result.metas?.length || 0} metas`);
     res.send(result);
   } catch (err) {
-    console.error('Catalog error:', err.message);
+    console.error('❌ Catalog error:', err.message, err.stack);
     res.status(500).send({ metas: [] });
   }
 });
