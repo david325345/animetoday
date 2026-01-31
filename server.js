@@ -71,7 +71,7 @@ async function getTMDBImages(tmdbId) {
     const poster = posters.find(p => p.iso_639_1 === 'en' || !p.iso_639_1) || posters[0];
     
     return {
-      backdrop: backdrop ? `https://image.tmdb.org/t/p/original${backdrop.file_path}` : null,
+      backdrop: backdrop ? `https://image.tmdb.org/t/p/w1280${backdrop.file_path}` : null,
       poster: poster ? `https://image.tmdb.org/t/p/w500${poster.file_path}` : null
     };
   } catch (err) {
@@ -256,7 +256,8 @@ builder.defineCatalogHandler(async (args) => {
   return {
     metas: todayAnimeCache.map(s => {
       const poster = s.tmdbImages?.poster || s.media.coverImage.extraLarge || s.media.coverImage.large;
-      const background = s.tmdbImages?.backdrop || s.media.bannerImage || poster;
+      // Preferovat AniList banner (je lepší formátovaný pro Stremio)
+      const background = s.media.bannerImage || s.tmdbImages?.backdrop || poster;
       
       return {
         id: `nyaa:${s.media.id}:${s.episode}`,
@@ -283,7 +284,8 @@ builder.defineMetaHandler(async (args) => {
 
   const m = schedule.media;
   const poster = schedule.tmdbImages?.poster || m.coverImage.extraLarge || m.coverImage.large;
-  const background = schedule.tmdbImages?.backdrop || m.bannerImage || poster;
+  // Preferovat AniList banner před TMDB
+  const background = m.bannerImage || schedule.tmdbImages?.backdrop || poster;
   
   return {
     meta: {
