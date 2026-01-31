@@ -118,8 +118,9 @@ async function searchNyaa(animeName, episode) {
   return [];
 }
 
-async function getRealDebridStream(magnetUrl) {
-  if (!REALDEBRID_API_KEY) {
+async function getRealDebridStream(magnetUrl, apiKey) {
+  if (!apiKey) {
+    console.log('No RealDebrid API key provided');
     return null;
   }
 
@@ -131,7 +132,7 @@ async function getRealDebridStream(magnetUrl) {
       `magnet=${encodeURIComponent(magnetUrl)}`,
       {
         headers: {
-          'Authorization': `Bearer ${REALDEBRID_API_KEY}`,
+          'Authorization': `Bearer ${apiKey}`,
           'Content-Type': 'application/x-www-form-urlencoded'
         },
         timeout: 10000
@@ -151,7 +152,7 @@ async function getRealDebridStream(magnetUrl) {
       'files=all',
       {
         headers: {
-          'Authorization': `Bearer ${REALDEBRID_API_KEY}`,
+          'Authorization': `Bearer ${apiKey}`,
           'Content-Type': 'application/x-www-form-urlencoded'
         },
         timeout: 5000
@@ -167,7 +168,7 @@ async function getRealDebridStream(magnetUrl) {
       const infoResponse = await axios.get(
         `https://api.real-debrid.com/rest/1.0/torrents/info/${torrentId}`,
         {
-          headers: { 'Authorization': `Bearer ${REALDEBRID_API_KEY}` },
+          headers: { 'Authorization': `Bearer ${apiKey}` },
           timeout: 5000
         }
       );
@@ -190,7 +191,7 @@ async function getRealDebridStream(magnetUrl) {
       `link=${encodeURIComponent(links[0])}`,
       {
         headers: {
-          'Authorization': `Bearer ${REALDEBRID_API_KEY}`,
+          'Authorization': `Bearer ${apiKey}`,
           'Content-Type': 'application/x-www-form-urlencoded'
         },
         timeout: 5000
@@ -335,15 +336,18 @@ builder.defineStreamHandler(async (args) => {
   }
 
   const streams = [];
+  
+  // Získat RD API klíč z config (pokud byl přidán přes URL)
+  const userRdKey = args.config?.rd || REALDEBRID_API_KEY;
 
   for (const torrent of torrents) {
     if (!torrent.magnet) continue;
 
-    if (REALDEBRID_API_KEY) {
+    if (userRdKey) {
       streams.push({
         name: 'Nyaa + RealDebrid',
         title: `🎬 ${torrent.name}\n👥 ${torrent.seeders} seeders | 📦 ${torrent.filesize}`,
-        externalUrl: `${process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`}/rd/${encodeURIComponent(torrent.magnet)}`
+        externalUrl: `${process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`}/rd/${encodeURIComponent(torrent.magnet)}?key=${encodeURIComponent(userRdKey)}`
       });
     } else {
       streams.push({
@@ -365,9 +369,15 @@ const app = express();
 
 app.get('/rd/:magnetUrl', async (req, res) => {
   const magnetUrl = decodeURIComponent(req.params.magnetUrl);
-  console.log(`RD callback for magnet`);
+  const apiKey = req.query.key || REALDEBRID_API_KEY;
   
-  const streamUrl = await getRealDebridStream(magnetUrl);
+  console.log(`RD callback for magnet (key: ${apiKey ? 'provided' : 'missing'})`);
+  
+  if (!apiKey) {
+    return res.status(400).send('RealDebrid API key required');
+  }
+  
+  const streamUrl = await getRealDebridStream(magnetUrl, apiKey);
   
   if (streamUrl) {
     res.redirect(streamUrl);
