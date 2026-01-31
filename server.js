@@ -1,4 +1,4 @@
-const { addonBuilder } = require('stremio-addon-sdk');
+const { addonBuilder, serveHTTP } = require('stremio-addon-sdk');
 const axios = require('axios');
 const cron = require('node-cron');
 const express = require('express');
@@ -12,7 +12,7 @@ let todayAnimeCache = [];
 
 const manifest = {
   id: 'cz.anime.nyaa.direct',
-  version: '4.0.0',
+  version: '4.0.1',
   name: 'Anime Today + Nyaa',
   description: 'Dnešní anime s Nyaa torrenty přes RealDebrid',
   resources: ['catalog', 'meta', 'stream'],
@@ -124,7 +124,6 @@ async function searchNyaa(animeName, episode) {
 
 async function getRealDebridStream(magnetUrl, apiKey) {
   if (!apiKey) {
-    console.log('No RealDebrid API key provided');
     return null;
   }
 
@@ -144,12 +143,10 @@ async function getRealDebridStream(magnetUrl, apiKey) {
     );
 
     if (!addResponse.data?.id) {
-      console.log('RealDebrid: Upload failed');
       return null;
     }
 
     const torrentId = addResponse.data.id;
-    console.log(`RealDebrid: Torrent ID ${torrentId}`);
 
     await axios.post(
       `https://api.real-debrid.com/rest/1.0/torrents/selectFiles/${torrentId}`,
@@ -162,8 +159,6 @@ async function getRealDebridStream(magnetUrl, apiKey) {
         timeout: 5000
       }
     );
-
-    console.log(`RealDebrid: Waiting for processing...`);
 
     let links = null;
     for (let i = 0; i < 5; i++) {
@@ -184,11 +179,8 @@ async function getRealDebridStream(magnetUrl, apiKey) {
     }
 
     if (!links || links.length === 0) {
-      console.log('RealDebrid: No links available');
       return null;
     }
-
-    console.log(`RealDebrid: Unrestricting...`);
 
     const unrestrictResponse = await axios.post(
       'https://api.real-debrid.com/rest/1.0/unrestrict/link',
@@ -207,7 +199,6 @@ async function getRealDebridStream(magnetUrl, apiKey) {
       return unrestrictResponse.data.download;
     }
 
-    console.log('RealDebrid: No download link');
     return null;
   } catch (error) {
     console.error('RealDebrid error:', error.message);
@@ -224,12 +215,7 @@ async function updateCache() {
 updateCache();
 cron.schedule('*/15 * * * *', updateCache);
 
-// Počkat na inicializaci builderu
-async function startServer() {
-  // Počkat chvíli na builder inicializaci
-  await new Promise(resolve => setTimeout(resolve, 1000));
-  
-  builder.defineCatalogHandler(async (args) => {
+builder.defineCatalogHandler(async (args) => {
   if (args.type === 'series' && args.id === 'anime-today-nyaa') {
     const skip = parseInt(args.extra?.skip) || 0;
     
@@ -322,7 +308,6 @@ builder.defineStreamHandler(async (args) => {
   );
 
   if (!schedule) {
-    console.log('Anime not found');
     return { streams: [] };
   }
 
@@ -330,22 +315,17 @@ builder.defineStreamHandler(async (args) => {
   const animeName = media.title.romaji || media.title.english || media.title.native;
   const animeNameEn = media.title.english || media.title.romaji || media.title.native;
   
-  console.log(`Searching: ${animeName}`);
-  
   let torrents = await searchNyaa(animeName, episode);
   
   if (torrents.length === 0 && animeNameEn !== animeName) {
-    console.log('Trying English name...');
     torrents = await searchNyaa(animeNameEn, episode);
   }
 
   if (torrents.length === 0) {
-    console.log('No torrents found');
     return { streams: [] };
   }
 
   const streams = [];
-  
   const userRdKey = args.config?.rd || REALDEBRID_API_KEY;
 
   for (const torrent of torrents) {
@@ -373,29 +353,16 @@ builder.defineStreamHandler(async (args) => {
   return { streams };
 });
 
-// Vytvořit Express app
+// Express server pro custom routes
 const app = express();
 
-// CORS
-app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', '*');
-  if (req.method === 'OPTIONS') {
-    res.sendStatus(200);
-  } else {
-    next();
-  }
-});
-
-// Statické soubory z public PŘED addon routes
-app.use(express.static(path.join(__dirname, 'public')));
+// Servovat static soubory z public
+app.use('/setup', express.static(path.join(__dirname, 'public')));
 
 // RealDebrid callback
 app.get('/rd/:magnetUrl', async (req, res) => {
   const magnetUrl = decodeURIComponent(req.params.magnetUrl);
   const apiKey = req.query.key || REALDEBRID_API_KEY;
-  
-  console.log(`RD callback (key: ${apiKey ? 'provided' : 'missing'})`);
   
   if (!apiKey) {
     return res.status(400).send('RealDebrid API key required');
@@ -410,93 +377,10 @@ app.get('/rd/:magnetUrl', async (req, res) => {
   }
 });
 
-// Addon routes (manuálně)
-const addonInterface = builder.getInterface();
+// Použít serveHTTP s naším Express serverem
+serveHTTP(builder.getInterface(), { port: PORT, server: app });
 
-app.get('/manifest.json', (req, res) => {
-  res.setHeader('Content-Type', 'application/json');
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.send(manifest);
-});
-
-app.get('/catalog/:type/:id.json', async (req, res) => {
-  console.log(`📁 Catalog request: ${req.params.type}/${req.params.id}`);
-  res.setHeader('Content-Type', 'application/json');
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  try {
-    const handler = builder.getInterface().catalog;
-    console.log('Handler exists:', !!handler);
-    
-    if (!handler) {
-      console.error('❌ Catalog handler not found');
-      return res.status(500).send({ metas: [] });
-    }
-    
-    const result = await handler({
-      type: req.params.type,
-      id: req.params.id,
-      extra: req.query
-    });
-    console.log(`✅ Catalog returned ${result.metas?.length || 0} metas`);
-    res.send(result);
-  } catch (err) {
-    console.error('❌ Catalog error:', err.message, err.stack);
-    res.status(500).send({ metas: [] });
-  }
-});
-
-app.get('/meta/:type/:id.json', async (req, res) => {
-  res.setHeader('Content-Type', 'application/json');
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  try {
-    const handler = builder.getInterface().meta;
-    if (!handler) {
-      return res.status(500).send({ meta: null });
-    }
-    
-    const result = await handler({
-      type: req.params.type,
-      id: req.params.id,
-      config: req.query
-    });
-    res.send(result);
-  } catch (err) {
-    console.error('Meta error:', err.message);
-    res.status(500).send({ meta: null });
-  }
-});
-
-app.get('/stream/:type/:id.json', async (req, res) => {
-  res.setHeader('Content-Type', 'application/json');
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  try {
-    const handler = builder.getInterface().stream;
-    if (!handler) {
-      return res.status(500).send({ streams: [] });
-    }
-    
-    const result = await handler({
-      type: req.params.type,
-      id: req.params.id,
-      config: req.query
-    });
-    res.send(result);
-  } catch (err) {
-    console.error('Stream error:', err.message);
-    res.status(500).send({ streams: [] });
-  }
-});
-
-app.listen(PORT, () => {
-  console.log(`🚀 Anime Today + Nyaa běží na portu ${PORT}`);
-  console.log(`📺 Manifest: http://localhost:${PORT}/manifest.json`);
-  console.log(`🌐 Web: http://localhost:${PORT}/`);
-  console.log(`🔑 RealDebrid: ${REALDEBRID_API_KEY ? '✅ Aktivní' : '❌ Neaktivní'}`);
-});
-}
-
-// Spustit server
-startServer().catch(err => {
-  console.error('Server start error:', err);
-  process.exit(1);
-});
+console.log(`🚀 Anime Today + Nyaa běží na portu ${PORT}`);
+console.log(`📺 Manifest: http://localhost:${PORT}/manifest.json`);
+console.log(`🌐 Setup: http://localhost:${PORT}/setup/`);
+console.log(`🔑 RealDebrid: ${REALDEBRID_API_KEY ? '✅ Aktivní' : '❌ Neaktivní'}`);
