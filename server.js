@@ -1,4 +1,4 @@
-const { addonBuilder, serveHTTP } = require('stremio-addon-sdk');
+const { addonBuilder } = require('stremio-addon-sdk');
 const axios = require('axios');
 const cron = require('node-cron');
 const express = require('express');
@@ -84,7 +84,6 @@ async function searchNyaa(animeName, episode) {
     try {
       console.log(`Nyaa API: "${query}"`);
       
-      // Zkusit první 2 stránky (2x75 = 150 torrentů max)
       let allTorrents = [];
       
       for (let page = 1; page <= 2; page++) {
@@ -97,7 +96,7 @@ async function searchNyaa(animeName, episode) {
           if (result && result.length > 0) {
             allTorrents = allTorrents.concat(result);
           } else {
-            break; // Žádné další výsledky
+            break;
           }
         } catch (err) {
           console.error(`Page ${page} failed:`, err.message);
@@ -338,7 +337,6 @@ builder.defineStreamHandler(async (args) => {
 
   const streams = [];
   
-  // Získat RD API klíč z config (pokud byl přidán přes URL)
   const userRdKey = args.config?.rd || REALDEBRID_API_KEY;
 
   for (const torrent of torrents) {
@@ -366,21 +364,29 @@ builder.defineStreamHandler(async (args) => {
   return { streams };
 });
 
+// Vytvořit Express app
 const app = express();
 
-// Servovat statické soubory z public složky (absolutní cesta)
-app.use(express.static(path.join(__dirname, 'public')));
-
-// Explicitní route pro root (přepíše SDK landing page)
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+// CORS
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', '*');
+  if (req.method === 'OPTIONS') {
+    res.sendStatus(200);
+  } else {
+    next();
+  }
 });
 
+// Statické soubory z public PŘED addon routes
+app.use(express.static(path.join(__dirname, 'public')));
+
+// RealDebrid callback
 app.get('/rd/:magnetUrl', async (req, res) => {
   const magnetUrl = decodeURIComponent(req.params.magnetUrl);
   const apiKey = req.query.key || REALDEBRID_API_KEY;
   
-  console.log(`RD callback for magnet (key: ${apiKey ? 'provided' : 'missing'})`);
+  console.log(`RD callback (key: ${apiKey ? 'provided' : 'missing'})`);
   
   if (!apiKey) {
     return res.status(400).send('RealDebrid API key required');
@@ -395,8 +401,47 @@ app.get('/rd/:magnetUrl', async (req, res) => {
   }
 });
 
-serveHTTP(builder.getInterface(), { port: PORT, server: app });
+// Addon routes (manuálně)
+const addonInterface = builder.getInterface();
 
-console.log(`🚀 Anime Today + Nyaa běží na portu ${PORT}`);
-console.log(`📺 Manifest: http://localhost:${PORT}/manifest.json`);
-console.log(`🔑 RealDebrid: ${REALDEBRID_API_KEY ? '✅ Aktivní' : '❌ Neaktivní'}`);
+app.get('/manifest.json', (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.send(addonInterface.manifest);
+});
+
+app.get('/catalog/:type/:id.json', async (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  try {
+    const result = await addonInterface[`/catalog/${req.params.type}/${req.params.id}.json`]({ query: req.query });
+    res.send(result);
+  } catch (err) {
+    res.status(500).send({ metas: [] });
+  }
+});
+
+app.get('/meta/:type/:id.json', async (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  try {
+    const result = await addonInterface[`/meta/${req.params.type}/${req.params.id}.json`]({ query: req.query });
+    res.send(result);
+  } catch (err) {
+    res.status(500).send({ meta: null });
+  }
+});
+
+app.get('/stream/:type/:id.json', async (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  try {
+    const result = await addonInterface[`/stream/${req.params.type}/${req.params.id}.json`]({ query: req.query });
+    res.send(result);
+  } catch (err) {
+    res.status(500).send({ streams: [] });
+  }
+});
+
+app.listen(PORT, () => {
+  console.log(`🚀 Anime Today + Nyaa běží na portu ${PORT}`);
+  console.log(`📺 Manifest: http://localhost:${PORT}/manifest.json`);
+  console.log(`🌐 Web: http://localhost:${PORT}/`);
+  console.log(`🔑 RealDebrid: ${REALDEBRID_API_KEY ? '✅ Aktivní' : '❌ Neaktivní'}`);
+});
