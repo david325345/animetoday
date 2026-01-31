@@ -1,7 +1,7 @@
 {
-  "name": "stremio-anime-today",
-  "version": "2.0.0",
-  "description": "Dnešní anime z AniList s Kitsu ID",
+  "name": "stremio-anime-nyaa",
+  "version": "3.0.0",
+  "description": "Dnešní anime z AniList se streamy z Nyaa",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -9,6 +9,7 @@
   "dependencies": {
     "stremio-addon-sdk": "^1.6.10",
     "axios": "^1.6.0",
+    "xml2js": "^0.6.2",
     "node-cron": "^3.0.3"
   },
   "engines": {
