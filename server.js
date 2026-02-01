@@ -270,13 +270,22 @@ builder.defineCatalogHandler(async (args) => {
   if (args.type !== 'series' || args.id !== 'anime-today') return { metas: [] };
   if (parseInt(args.extra?.skip) > 0) return { metas: [] };
 
+  // Seřadit podle času vysílání (nejdřív = nahoře)
+  const sortedCache = [...todayAnimeCache].sort((a, b) => a.airingAt - b.airingAt);
+
   return {
-    metas: todayAnimeCache.map(s => {
+    metas: sortedCache.map(s => {
       let poster = s.tmdbImages?.poster || s.media.coverImage.extraLarge || s.media.coverImage.large;
       if (!poster || poster === 'null' || poster === '') {
         poster = 'https://via.placeholder.com/230x345/1a1a2e/ffffff?text=No+Image';
       }
       const background = s.media.bannerImage || s.tmdbImages?.backdrop || poster;
+      
+      // Čas vysílání v CET (UTC+1)
+      const airDate = new Date(s.airingAt * 1000);
+      const hours = airDate.getUTCHours() + 1; // UTC -> CET
+      const minutes = airDate.getUTCMinutes().toString().padStart(2, '0');
+      
       return {
         id: `nyaa:${s.media.id}:${s.episode}`,
         type: 'series',
@@ -286,7 +295,7 @@ builder.defineCatalogHandler(async (args) => {
         logo: s.media.bannerImage || undefined,
         description: `Epizoda ${s.episode}\n\n${(s.media.description || '').replace(/<[^>]*>/g, '')}`,
         genres: s.media.genres || [],
-        releaseInfo: `${s.media.season || ''} ${s.media.seasonYear || ''} - Ep ${s.episode}`.trim(),
+        releaseInfo: `${hours}:${minutes}`,
         imdbRating: s.media.averageScore ? (s.media.averageScore / 10).toFixed(1) : undefined
       };
     })
