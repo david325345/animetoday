@@ -314,18 +314,39 @@ builder.defineStreamHandler(async (args) => {
   if (!schedule) return { streams: [] };
 
   const m = schedule.media;
-  let torrents = await searchNyaa(m.title.romaji || m.title.english, parseInt(episode));
+  const targetEpisode = parseInt(episode);
+  
+  let torrents = await searchNyaa(m.title.romaji || m.title.english, targetEpisode);
   if (!torrents.length && m.title.english !== m.title.romaji) {
-    torrents = await searchNyaa(m.title.english || m.title.romaji, parseInt(episode));
+    torrents = await searchNyaa(m.title.english || m.title.romaji, targetEpisode);
   }
-  if (!torrents.length) return { streams: [] };
+  
+  // Zkontrolovat jestli torrenty obsahují správný díl
+  const correctEpisodeTorrents = torrents.filter(t => {
+    const name = t.name.toLowerCase();
+    // Hledat pattern pro číslo epizody: - 04, _04, e04, ep04, episode 04, etc.
+    const episodePattern = new RegExp(`(?:[-_\\s]|e(?:p(?:isode)?)?\\s*)0*${targetEpisode}(?:[\\s\\-_]|$|\\D)`, 'i');
+    return episodePattern.test(name);
+  });
+  
+  if (!correctEpisodeTorrents.length) {
+    // Díl ještě není na Nyaa
+    return {
+      streams: [{
+        name: '⏳ Ještě není dostupné',
+        title: `Epizoda ${targetEpisode} ještě nebyla nahrána na Nyaa.si\n\nZkuste to za chvíli znovu`,
+        url: 'https://nyaa.si',
+        behaviorHints: { notWebReady: true }
+      }]
+    };
+  }
 
   // Použít RD klíč z ENV
   const rdKey = REALDEBRID_API_KEY;
   const baseUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
 
   return {
-    streams: torrents.filter(t => t.magnet).map(t => {
+    streams: correctEpisodeTorrents.filter(t => t.magnet).map(t => {
       if (rdKey) {
         const streamUrl = `${baseUrl}/rd/${encodeURIComponent(t.magnet)}?key=${encodeURIComponent(rdKey)}`;
         return {
