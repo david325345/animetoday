@@ -7,6 +7,7 @@ const { si } = require('nyaapi');
 const crypto = require('crypto');
 
 const PORT = process.env.PORT || 7000;
+const REALDEBRID_API_KEY = process.env.REALDEBRID_API_KEY || '';
 const TMDB_API_KEY = process.env.TMDB_API_KEY || '';
 
 let todayAnimeCache = [];
