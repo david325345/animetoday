@@ -1,4 +1,4 @@
-const { addonBuilder } = require('stremio-addon-sdk');
+const { addonBuilder, getRouter } = require('stremio-addon-sdk');
 const axios = require('axios');
 const cron = require('node-cron');
 const express = require('express');
@@ -368,44 +368,9 @@ app.get('/rd/:magnet', async (req, res) => {
   stream ? res.redirect(stream) : res.status(500).send('Failed');
 });
 
-// Získat addon interface
-const addonInterface = builder.getInterface();
-
-// Manifest route
-app.get('/manifest.json', (req, res) => {
-  res.json(manifest);
-});
-
-// Addon routes - bez custom config
-app.get('/catalog/:type/:id.json', async (req, res) => {
-  try {
-    const result = await addonInterface.catalog({ type: req.params.type, id: req.params.id, extra: req.query });
-    res.json(result);
-  } catch (err) {
-    console.error('Catalog error:', err.message);
-    res.status(500).json({ metas: [] });
-  }
-});
-
-app.get('/meta/:type/:id.json', async (req, res) => {
-  try {
-    const result = await addonInterface.meta({ type: req.params.type, id: req.params.id });
-    res.json(result);
-  } catch (err) {
-    console.error('Meta error:', err.message);
-    res.status(500).json({ meta: null });
-  }
-});
-
-app.get('/stream/:type/:id.json', async (req, res) => {
-  try {
-    const result = await addonInterface.stream({ type: req.params.type, id: req.params.id });
-    res.json(result);
-  } catch (err) {
-    console.error('Stream error:', err.message);
-    res.status(500).json({ streams: [] });
-  }
-});
+// Použít SDK router
+const addonRouter = getRouter(builder.getInterface());
+app.use(addonRouter);
 
 app.listen(PORT, () => {
   console.log(`🚀 Server: http://localhost:${PORT}/`);
