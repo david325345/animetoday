@@ -281,11 +281,6 @@ builder.defineCatalogHandler(async (args) => {
       }
       const background = s.media.bannerImage || s.tmdbImages?.backdrop || poster;
       
-      // Čas vysílání v CET (UTC+1)
-      const airDate = new Date(s.airingAt * 1000);
-      const hours = airDate.getUTCHours() + 1; // UTC -> CET
-      const minutes = airDate.getUTCMinutes().toString().padStart(2, '0');
-      
       return {
         id: `nyaa:${s.media.id}:${s.episode}`,
         type: 'series',
@@ -295,7 +290,7 @@ builder.defineCatalogHandler(async (args) => {
         logo: s.media.bannerImage || undefined,
         description: `Epizoda ${s.episode}\n\n${(s.media.description || '').replace(/<[^>]*>/g, '')}`,
         genres: s.media.genres || [],
-        releaseInfo: `${hours}:${minutes}`,
+        releaseInfo: `${s.media.season || ''} ${s.media.seasonYear || ''} - Ep ${s.episode}`.trim(),
         imdbRating: s.media.averageScore ? (s.media.averageScore / 10).toFixed(1) : undefined
       };
     })
