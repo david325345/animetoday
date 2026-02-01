@@ -61,10 +61,27 @@
             cursor: pointer;
             transition: all 0.3s;
             box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+            margin-bottom: 16px;
         }
         .btn:hover {
             transform: translateY(-3px);
             box-shadow: 0 8px 25px rgba(102, 126, 234, 0.5);
+        }
+        .url-box {
+            background: #f9fafb;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 12px;
+            font-family: monospace;
+            font-size: 13px;
+            color: #374151;
+            margin-bottom: 12px;
+            word-break: break-all;
+        }
+        .note {
+            font-size: 13px;
+            color: #6b7280;
+            margin-bottom: 30px;
         }
         .features {
             margin-top: 40px;
@@ -104,9 +121,17 @@
             s torrenty z Nyaa.si přes RealDebrid
         </p>
         
-        <a href="/manifest.json" class="btn">
-            🚀 Instalovat Addon
+        <a href="stremio://animetday.onrender.com/manifest.json" class="btn">
+            🚀 Instalovat do Stremio
         </a>
+        
+        <p class="note">
+            Nebo zkopírujte URL a vložte do Stremio → Addons → Install from URL
+        </p>
+        
+        <div class="url-box">
+            https://animetday.onrender.com/manifest.json
+        </div>
         
         <div class="features">
             <h3>✨ Funkce</h3>
