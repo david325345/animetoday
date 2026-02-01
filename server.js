@@ -242,6 +242,29 @@ async function updateCache() {
 cron.schedule('0 4 * * *', updateCache);
 updateCache();
 
+// Self-ping každých 10 minut od spuštění do půlnoci (00:00)
+const keepAliveInterval = setInterval(async () => {
+  const now = new Date();
+  const hour = now.getUTCHours(); // UTC čas (pro CET +1)
+  
+  // Běžet jen do 23:00 UTC (00:00 CET)
+  if (hour >= 23) {
+    console.log('💤 Keep-alive: zastaveno (půlnoc)');
+    return;
+  }
+  
+  try {
+    const url = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+    await axios.get(`${url}/manifest.json`, { timeout: 5000 });
+    console.log(`⏰ Keep-alive ping (${now.getHours()}:${now.getMinutes().toString().padStart(2, '0')})`);
+  } catch (err) {
+    console.error('Keep-alive error:', err.message);
+  }
+}, 10 * 60 * 1000); // 10 minut
+
+console.log('⏰ Cache update: každý den ve 4:00');
+console.log('💡 Keep-alive: aktivní po probuzení až do půlnoci (každých 10 min)');
+
 // ===== Stremio Handlers =====
 builder.defineCatalogHandler(async (args) => {
   if (args.type !== 'series' || args.id !== 'anime-today') return { metas: [] };
