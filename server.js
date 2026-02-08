@@ -377,9 +377,17 @@ builder.defineStreamHandler(async (args) => {
     streams: correctEpisodeTorrents.filter(t => t.magnet).map(t => {
       if (rdKey) {
         const streamUrl = `${baseUrl}/rd/${encodeURIComponent(t.magnet)}?key=${encodeURIComponent(rdKey)}`;
+        
+        // Zkontrolovat jestli je v cache
+        const cacheKey = `${t.magnet}_${rdKey}`;
+        const cached = rdStreamCache.get(cacheKey);
+        const isCached = cached && (Date.now() - cached.timestamp < 3600000);
+        
         return {
-          name: 'Nyaa + RealDebrid',
-          title: `🎬 ${t.name}\n👥 ${t.seeders} | 📦 ${t.filesize}`,
+          name: isCached ? 'Nyaa + RealDebrid ✅' : 'Nyaa + RealDebrid ❌',
+          title: isCached 
+            ? `✅ Ready\n🎬 ${t.name}\n👥 ${t.seeders} | 📦 ${t.filesize}`
+            : `❌ Not yet downloaded\n🎬 ${t.name}\n👥 ${t.seeders} | 📦 ${t.filesize}\n⏳ First play takes ~20s`,
           url: streamUrl,
           behaviorHints: { bingeGroup: 'nyaa-rd' }
         };
