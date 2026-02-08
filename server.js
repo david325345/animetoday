@@ -175,12 +175,20 @@ async function getRealDebridStream(magnet, apiKey) {
   const cacheKey = `${magnet}_${apiKey}`;
   const cached = rdStreamCache.get(cacheKey);
   if (cached && (Date.now() - cached.timestamp < 3600000)) {
-    console.log('RD: ✅ Using cached stream');
-    return cached.url;
+    if (cached.status === 'success') {
+      console.log('RD: ✅ Using cached stream');
+      return cached.url;
+    } else if (cached.status === 'processing') {
+      console.log('RD: ⏳ Still processing...');
+      return null;
+    }
   }
   
   try {
     console.log('RD: Adding magnet...');
+    
+    // Označit jako "processing"
+    rdStreamCache.set(cacheKey, { status: 'processing', timestamp: Date.now() });
     
     const add = await axios.post(
       'https://api.real-debrid.com/rest/1.0/torrents/addMagnet',
@@ -188,14 +196,20 @@ async function getRealDebridStream(magnet, apiKey) {
       { headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 10000 }
     );
     const torrentId = add.data?.id;
-    if (!torrentId) return null;
+    if (!torrentId) {
+      rdStreamCache.delete(cacheKey);
+      return null;
+    }
     
     const torrentInfo = await axios.get(
       `https://api.real-debrid.com/rest/1.0/torrents/info/${torrentId}`,
       { headers: { 'Authorization': `Bearer ${apiKey}` }}
     );
     const files = torrentInfo.data?.files;
-    if (!files || files.length === 0) return null;
+    if (!files || files.length === 0) {
+      rdStreamCache.delete(cacheKey);
+      return null;
+    }
     const fileIds = files.map((f, i) => i + 1).join(',');
     
     await axios.post(
@@ -218,16 +232,20 @@ async function getRealDebridStream(magnet, apiKey) {
         );
         if (unrestrict.data?.download) {
           const streamUrl = unrestrict.data.download;
-          // Uložit do cache
-          rdStreamCache.set(cacheKey, { url: streamUrl, timestamp: Date.now() });
+          // Uložit jako úspěšný
+          rdStreamCache.set(cacheKey, { status: 'success', url: streamUrl, timestamp: Date.now() });
           console.log('RD: ✅ Success (cached)!');
           return streamUrl;
         }
       }
     }
+    // Selhalo - vymazat z cache
+    rdStreamCache.delete(cacheKey);
     return null;
   } catch (err) {
     console.error('RealDebrid error:', err.response?.status, err.response?.data || err.message);
+    // Selhalo - vymazat z cache
+    rdStreamCache.delete(cacheKey);
     return null;
   }
 }
@@ -237,6 +255,11 @@ async function updateCache() {
   console.log('🔄 Updating cache...');
   const schedules = await getTodayAnime();
   todayAnimeCache = schedules;
+  
+  // Vymazat RealDebrid cache při aktualizaci
+  rdStreamCache.clear();
+  console.log('🗑️ RealDebrid cache cleared');
+  
   console.log(`✅ Cache: ${todayAnimeCache.length} anime`);
 }
 
@@ -378,19 +401,34 @@ builder.defineStreamHandler(async (args) => {
       if (rdKey) {
         const streamUrl = `${baseUrl}/rd/${encodeURIComponent(t.magnet)}?key=${encodeURIComponent(rdKey)}`;
         
-        // Zkontrolovat jestli je v cache
+        // Zkontrolovat cache status
         const cacheKey = `${t.magnet}_${rdKey}`;
         const cached = rdStreamCache.get(cacheKey);
-        const isCached = cached && (Date.now() - cached.timestamp < 3600000);
+        const isReady = cached && cached.status === 'success' && (Date.now() - cached.timestamp < 3600000);
+        const isProcessing = cached && cached.status === 'processing' && (Date.now() - cached.timestamp < 3600000);
         
-        return {
-          name: isCached ? 'Nyaa + RealDebrid ✅' : 'Nyaa + RealDebrid ❌',
-          title: isCached 
-            ? `✅ Ready\n🎬 ${t.name}\n👥 ${t.seeders} | 📦 ${t.filesize}`
-            : `❌ Not yet downloaded\n🎬 ${t.name}\n👥 ${t.seeders} | 📦 ${t.filesize}\n⏳ First play takes ~20s`,
-          url: streamUrl,
-          behaviorHints: { bingeGroup: 'nyaa-rd' }
-        };
+        if (isReady) {
+          return {
+            name: 'Nyaa + RealDebrid ✅',
+            title: `✅ Ready to play\n🎬 ${t.name}\n👥 ${t.seeders} | 📦 ${t.filesize}`,
+            url: streamUrl,
+            behaviorHints: { bingeGroup: 'nyaa-rd' }
+          };
+        } else if (isProcessing) {
+          return {
+            name: 'Nyaa + RealDebrid ⏳',
+            title: `⏳ Processing...\n🎬 ${t.name}\n👥 ${t.seeders} | 📦 ${t.filesize}\nTry again in a moment`,
+            url: streamUrl,
+            behaviorHints: { bingeGroup: 'nyaa-rd' }
+          };
+        } else {
+          return {
+            name: 'Nyaa + RealDebrid',
+            title: `🎬 ${t.name}\n👥 ${t.seeders} | 📦 ${t.filesize}`,
+            url: streamUrl,
+            behaviorHints: { bingeGroup: 'nyaa-rd' }
+          };
+        }
       } else {
         return {
           name: 'Nyaa (Magnet)',
