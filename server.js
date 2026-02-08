@@ -168,23 +168,6 @@ async function searchNyaa(animeName, episode) {
 }
 
 // ===== RealDebrid API =====
-async function checkRDInstantAvailability(magnet, apiKey) {
-  try {
-    const hash = magnet.match(/btih:([a-zA-Z0-9]+)/i)?.[1];
-    if (!hash) return false;
-    
-    const response = await axios.get(
-      `https://api.real-debrid.com/rest/1.0/torrents/instantAvailability/${hash}`,
-      { headers: { 'Authorization': `Bearer ${apiKey}` }, timeout: 5000 }
-    );
-    
-    // Pokud má data, torrent je dostupný
-    return response.data && Object.keys(response.data).length > 0;
-  } catch (err) {
-    return false;
-  }
-}
-
 async function getRealDebridStream(magnet, apiKey) {
   if (!apiKey) return null;
   
@@ -192,28 +175,12 @@ async function getRealDebridStream(magnet, apiKey) {
   const cacheKey = `${magnet}_${apiKey}`;
   const cached = rdStreamCache.get(cacheKey);
   if (cached && (Date.now() - cached.timestamp < 3600000)) {
-    if (cached.status === 'success') {
-      console.log('RD: ✅ Using cached stream');
-      return cached.url;
-    } else if (cached.status === 'processing') {
-      console.log('RD: ⏳ Still processing...');
-      return null;
-    }
+    console.log('RD: ✅ Using cached stream');
+    return cached.url;
   }
   
   try {
-    // Zkontrolovat instant availability
-    const isInstant = await checkRDInstantAvailability(magnet, apiKey);
-    if (!isInstant) {
-      console.log('RD: ⬇️ Not cached on RealDebrid - will download first');
-      // Označit jako "needs download" - neukládat do cache, jen zobrazit info
-      rdStreamCache.set(cacheKey, { status: 'downloading', timestamp: Date.now() });
-    }
-    
     console.log('RD: Adding magnet...');
-    
-    // Označit jako "processing"
-    rdStreamCache.set(cacheKey, { status: 'processing', timestamp: Date.now() });
     
     const add = await axios.post(
       'https://api.real-debrid.com/rest/1.0/torrents/addMagnet',
@@ -221,20 +188,14 @@ async function getRealDebridStream(magnet, apiKey) {
       { headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 10000 }
     );
     const torrentId = add.data?.id;
-    if (!torrentId) {
-      rdStreamCache.delete(cacheKey);
-      return null;
-    }
+    if (!torrentId) return null;
     
     const torrentInfo = await axios.get(
       `https://api.real-debrid.com/rest/1.0/torrents/info/${torrentId}`,
       { headers: { 'Authorization': `Bearer ${apiKey}` }}
     );
     const files = torrentInfo.data?.files;
-    if (!files || files.length === 0) {
-      rdStreamCache.delete(cacheKey);
-      return null;
-    }
+    if (!files || files.length === 0) return null;
     const fileIds = files.map((f, i) => i + 1).join(',');
     
     await axios.post(
@@ -257,20 +218,16 @@ async function getRealDebridStream(magnet, apiKey) {
         );
         if (unrestrict.data?.download) {
           const streamUrl = unrestrict.data.download;
-          // Uložit jako úspěšný
-          rdStreamCache.set(cacheKey, { status: 'success', url: streamUrl, timestamp: Date.now() });
+          // Uložit do cache
+          rdStreamCache.set(cacheKey, { url: streamUrl, timestamp: Date.now() });
           console.log('RD: ✅ Success (cached)!');
           return streamUrl;
         }
       }
     }
-    // Selhalo - vymazat z cache
-    rdStreamCache.delete(cacheKey);
     return null;
   } catch (err) {
     console.error('RealDebrid error:', err.response?.status, err.response?.data || err.message);
-    // Selhalo - vymazat z cache
-    rdStreamCache.delete(cacheKey);
     return null;
   }
 }
