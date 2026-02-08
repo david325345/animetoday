@@ -168,6 +168,23 @@ async function searchNyaa(animeName, episode) {
 }
 
 // ===== RealDebrid API =====
+async function checkRDInstantAvailability(magnet, apiKey) {
+  try {
+    const hash = magnet.match(/btih:([a-zA-Z0-9]+)/i)?.[1];
+    if (!hash) return false;
+    
+    const response = await axios.get(
+      `https://api.real-debrid.com/rest/1.0/torrents/instantAvailability/${hash}`,
+      { headers: { 'Authorization': `Bearer ${apiKey}` }, timeout: 5000 }
+    );
+    
+    // Pokud má data, torrent je dostupný
+    return response.data && Object.keys(response.data).length > 0;
+  } catch (err) {
+    return false;
+  }
+}
+
 async function getRealDebridStream(magnet, apiKey) {
   if (!apiKey) return null;
   
@@ -185,6 +202,14 @@ async function getRealDebridStream(magnet, apiKey) {
   }
   
   try {
+    // Zkontrolovat instant availability
+    const isInstant = await checkRDInstantAvailability(magnet, apiKey);
+    if (!isInstant) {
+      console.log('RD: ⬇️ Not cached on RealDebrid - will download first');
+      // Označit jako "needs download" - neukládat do cache, jen zobrazit info
+      rdStreamCache.set(cacheKey, { status: 'downloading', timestamp: Date.now() });
+    }
+    
     console.log('RD: Adding magnet...');
     
     // Označit jako "processing"
@@ -375,13 +400,11 @@ builder.defineStreamHandler(async (args) => {
   // Zkontrolovat jestli torrenty obsahují správný díl
   const correctEpisodeTorrents = torrents.filter(t => {
     const name = t.name.toLowerCase();
-    // Hledat pattern pro číslo epizody: - 04, _04, e04, ep04, episode 04, etc.
     const episodePattern = new RegExp(`(?:[-_\\s]|e(?:p(?:isode)?)?\\s*)0*${targetEpisode}(?:[\\s\\-_]|$|\\D)`, 'i');
     return episodePattern.test(name);
   });
   
   if (!correctEpisodeTorrents.length) {
-    // Díl ještě není na Nyaa
     return {
       streams: [{
         name: '⏳ Ještě není dostupné',
@@ -392,7 +415,6 @@ builder.defineStreamHandler(async (args) => {
     };
   }
 
-  // Použít RD klíč z ENV
   const rdKey = REALDEBRID_API_KEY;
   const baseUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
 
@@ -405,19 +427,11 @@ builder.defineStreamHandler(async (args) => {
         const cacheKey = `${t.magnet}_${rdKey}`;
         const cached = rdStreamCache.get(cacheKey);
         const isReady = cached && cached.status === 'success' && (Date.now() - cached.timestamp < 3600000);
-        const isProcessing = cached && cached.status === 'processing' && (Date.now() - cached.timestamp < 3600000);
         
         if (isReady) {
           return {
             name: 'Nyaa + RealDebrid ✅',
             title: `✅ Ready to play\n🎬 ${t.name}\n👥 ${t.seeders} | 📦 ${t.filesize}`,
-            url: streamUrl,
-            behaviorHints: { bingeGroup: 'nyaa-rd' }
-          };
-        } else if (isProcessing) {
-          return {
-            name: 'Nyaa + RealDebrid ⏳',
-            title: `⏳ Processing...\n🎬 ${t.name}\n👥 ${t.seeders} | 📦 ${t.filesize}\nTry again in a moment`,
             url: streamUrl,
             behaviorHints: { bingeGroup: 'nyaa-rd' }
           };
