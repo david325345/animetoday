@@ -16,6 +16,7 @@ console.log('  REALDEBRID_API_KEY:', REALDEBRID_API_KEY ? '✅ Set' : '❌ Missi
 console.log('  TMDB_API_KEY:', TMDB_API_KEY ? '✅ Set' : '❌ Missing');
 
 let todayAnimeCache = [];
+let rdStreamCache = new Map(); // Cache pro RD streamy (magnet -> URL)
 
 const manifest = {
   id: 'cz.anime.nyaa.rd',
@@ -169,7 +170,18 @@ async function searchNyaa(animeName, episode) {
 // ===== RealDebrid API =====
 async function getRealDebridStream(magnet, apiKey) {
   if (!apiKey) return null;
+  
+  // Zkontrolovat cache (platnost 1 hodina)
+  const cacheKey = `${magnet}_${apiKey}`;
+  const cached = rdStreamCache.get(cacheKey);
+  if (cached && (Date.now() - cached.timestamp < 3600000)) {
+    console.log('RD: ✅ Using cached stream');
+    return cached.url;
+  }
+  
   try {
+    console.log('RD: Adding magnet...');
+    
     const add = await axios.post(
       'https://api.real-debrid.com/rest/1.0/torrents/addMagnet',
       `magnet=${encodeURIComponent(magnet)}`,
@@ -205,8 +217,11 @@ async function getRealDebridStream(magnet, apiKey) {
           { headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/x-www-form-urlencoded' }}
         );
         if (unrestrict.data?.download) {
-          console.log('RD: ✅ Success!');
-          return unrestrict.data.download;
+          const streamUrl = unrestrict.data.download;
+          // Uložit do cache
+          rdStreamCache.set(cacheKey, { url: streamUrl, timestamp: Date.now() });
+          console.log('RD: ✅ Success (cached)!');
+          return streamUrl;
         }
       }
     }
@@ -221,20 +236,6 @@ async function getRealDebridStream(magnet, apiKey) {
 async function updateCache() {
   console.log('🔄 Updating cache...');
   const schedules = await getTodayAnime();
-  for (const schedule of schedules) {
-    const media = schedule.media;
-    const englishTitle = media.title.english || media.title.romaji;
-    const year = media.seasonYear;
-    const tmdbId = await searchTMDB(englishTitle, year);
-    if (tmdbId) {
-      const images = await getTMDBImages(tmdbId);
-      if (images) {
-        schedule.tmdbImages = images;
-        console.log(`✅ TMDB: ${englishTitle}`);
-      }
-    }
-    await new Promise(r => setTimeout(r, 300));
-  }
   todayAnimeCache = schedules;
   console.log(`✅ Cache: ${todayAnimeCache.length} anime`);
 }
